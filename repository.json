@@ -1,0 +1,16 @@
+{
+  "name": "TotalJS Flow Components Repository",
+  "url": "https://github.com/Dmytro-Khomenko/nova-totaljs-components-repository",
+  "components": [
+    {
+      "id": "crontab_advanced",
+      "name": "Crontab [Advanced]",
+      "group": "Triggers",
+      "version": "1.1.6",
+      "url": "https://raw.githubusercontent.com/Dmytro-Khomenko/nova-totaljs-components-repository/main/components/Triggers/triggers_crontab_advanced.html",
+      "author": "Demon",
+      "icon": "ti ti-clock",
+      "readme": "### Crontab [Advanced]\n\nCron-based trigger component with support for multiple timers and OS command execution.\n\n**Features:**\n- Multiple cron timers with individual schedules\n- Execute OS commands on trigger (optional)\n- Output various data types: string, number, boolean, date, object, buffer, command output\n- Random data generation option\n- Optional trigger 10 seconds after initialization\n\n**Outputs:**\n- **Output**: Configured data or command stdout\n- **Error**: Command execution errors with stderr details"
+    }
+  ]
+}
