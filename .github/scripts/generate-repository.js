@@ -63,6 +63,8 @@ function parseComponent(filePath, repoUrl) {
     const version = extractExportValue(scriptContent, 'version');
     const author = extractExportValue(scriptContent, 'author');
     const icon = extractExportValue(scriptContent, 'icon');
+    const color = extractExportValue(scriptContent, 'color');
+    const kind = extractExportValue(scriptContent, 'kind');
     
     // Generate URL - use raw.githubusercontent.com for direct file access
     const relativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
@@ -70,15 +72,17 @@ function parseComponent(filePath, repoUrl) {
     
     const component = {
         id: id || path.basename(filePath, '.html'),
-        name: name || path.basename(filePath, '.html'),
         group: group || 'Uncategorized',
-        version: version || '1.0.0',
-        url: url
+        name: name || path.basename(filePath, '.html'),
+        url: url,
+        author: author || '',
+        icon: icon || '',
+        color: color || '',
+        version: version || '1',
+        kind: kind || ''
     };
     
-    // Add optional fields only if they exist
-    if (author) component.author = author;
-    if (icon) component.icon = icon;
+    // Add readme only if it exists and is not empty
     if (readme) component.readme = readme;
     
     return component;
@@ -138,14 +142,8 @@ function generateRepository() {
         return a.name.localeCompare(b.name);
     });
     
-    const repository = {
-        name: "TotalJS Flow Components Repository",
-        url: repoUrl,
-        components: components
-    };
-    
     const outputPath = path.join(process.cwd(), 'repository.json');
-    fs.writeFileSync(outputPath, JSON.stringify(repository, null, 2));
+    fs.writeFileSync(outputPath, JSON.stringify(components, null, 2));
     
     console.log(`✓ Generated repository.json with ${components.length} components`);
 }
