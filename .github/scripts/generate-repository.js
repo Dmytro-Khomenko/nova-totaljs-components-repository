@@ -28,6 +28,22 @@ function getGitHubRepoUrl() {
     }
 }
 
+// Get GitHub Pages URL from repository URL
+function getGitHubPagesUrl(repoUrl) {
+    // Extract username and repo name from GitHub URL
+    // Example: https://github.com/username/repo-name
+    const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+    if (!match) {
+        throw new Error('Invalid GitHub repository URL');
+    }
+    
+    const username = match[1];
+    const repoName = match[2];
+    
+    // GitHub Pages URL format: https://username.github.io/repo-name
+    return `https://${username}.github.io/${repoName}`;
+}
+
 // Extract value from exports statement
 function extractExportValue(content, key) {
     const patterns = [
@@ -45,7 +61,7 @@ function extractExportValue(content, key) {
 }
 
 // Parse component HTML file
-function parseComponent(filePath, repoUrl) {
+function parseComponent(filePath, pagesUrl) {
     const content = fs.readFileSync(filePath, 'utf8');
     
     // Extract script section
@@ -66,9 +82,9 @@ function parseComponent(filePath, repoUrl) {
     const color = extractExportValue(scriptContent, 'color');
     const kind = extractExportValue(scriptContent, 'kind');
     
-    // Generate URL - use raw.githubusercontent.com for direct file access
+    // Generate URL - use GitHub Pages for proper headers
     const relativePath = path.relative(process.cwd(), filePath).replace(/\\/g, '/');
-    const url = `https://raw.githubusercontent.com/${repoUrl.replace('https://github.com/', '')}/${process.env.GITHUB_REF_NAME || 'main'}/${relativePath}`;
+    const url = `${pagesUrl}/${relativePath}`;
     
     const component = {
         id: id || path.basename(filePath, '.html'),
@@ -124,14 +140,16 @@ function generateRepository() {
     }
     
     const repoUrl = getGitHubRepoUrl();
+    const pagesUrl = getGitHubPagesUrl(repoUrl);
     console.log(`Repository URL: ${repoUrl}`);
+    console.log(`GitHub Pages URL: ${pagesUrl}`);
     
     const componentFiles = findComponentFiles(componentsDir);
     console.log(`Found ${componentFiles.length} component files`);
     
     const components = componentFiles.map(file => {
         console.log(`Processing: ${path.relative(process.cwd(), file)}`);
-        return parseComponent(file, repoUrl);
+        return parseComponent(file, pagesUrl);
     });
     
     // Sort components by group and name
