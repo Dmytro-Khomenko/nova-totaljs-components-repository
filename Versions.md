@@ -1,4 +1,5 @@
 ### TotalJS deployment versions data:
-- Node.js  : v22.16.0
-- Total.js : v5012
-- Name     : Total.js Flow v10
+- Node.js  : v24.11.1
+- Total.js : v5015
+- Total.js Flow: v10
+- Total.js FlowStream: v40
