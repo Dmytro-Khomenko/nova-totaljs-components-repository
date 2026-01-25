@@ -1,65 +1,5 @@
 [
   {
-    "id": "embeddingsapi",
-    "group": "AI / Embeddings",
-    "name": "Olama Embeddings",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/RAG/embeddingsapi.html",
-    "author": "Auto-generated",
-    "icon": "ti ti-brain",
-    "color": "#8E43E7",
-    "version": "1.0.0",
-    "kind": "",
-    "readme": "This component calls an Olama Embeddings API endpoint to generate embeddings for provided text."
-  },
-  {
-    "id": "milvussearch",
-    "group": "AI / VectorDB",
-    "name": "Milvus Vector Search",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/RAG/milvussearch.html",
-    "author": "Auto-generated",
-    "icon": "ti ti-vector-triangle",
-    "color": "#4A89DC",
-    "version": "1.0.0",
-    "kind": "",
-    "readme": "This component performs a similarity search against a Milvus-compatible vector store.\n\nInputs\n- An embedding array (e.g. [0.12, -0.98, ...]).\n\nOutputs\n- The raw JSON response from the vector store, e.g.:\n{\n  \"code\": 0,\n  \"cost\": 0,\n  \"data\": [\n    { \"distance\": 0.9, \"id\": 123, \"language\": \"ua\", \"location\": \"Kyivska\", \"text\": \"Київська\" },\n    { \"distance\": 0.80, \"id\": 456, \"language\": \"ua\", \"location\": \"Lvivska\", \"text\": \"Львівська\" }\n  ],\n  \"topks\": [ 2 ]\n}\n\nThe settings allow configuring the instance, collection, vector field, metric type, result limit, and output fields to return."
-  },
-  {
-    "id": "split",
-    "group": "Array",
-    "name": "Split",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_split.html",
-    "author": "Total.js",
-    "icon": "ti ti-strikethrough",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "The component splits a message with an array of objects on the input into separate messages with individual objects on the output.\n\n__Input example__:\n\n```js\n[\n\t{\n\t\t\"email\": \"michal@totaljs.com\",\n\t\t\"date\": 20220202,\n\t\t\"name\": \"Michal Klacan\"\n\t},\n\t{\n\t\t\"email\": \"martin@totaljs.com\",\n\t\t\"date\": 20220204,\n\t\t\"name\": \"Martin Smola\"\n\t},\n\t{\n\t\t\"email\": \"peter@totaljs.com\",\n\t\t\"datum\": 20220210,\n\t\t\"name\": \"Peter Sirka\"\n\t}\n]\n```\n\n__Output example__:\n\n```js\n{\n\t\"email\": \"michal@totaljs.com\",\n\t\"date\": 20220202,\n\t\"name\": \"Michal Klacan\"\n}\n```\n\n```js\n{\n\t\"email\": \"martin@totaljs.com\",\n\t\"date\": 20220204,\n\t\"name\": \"Martin Smola\"\n}\n```\n\n```js\n{\n\t\"email\": \"peter@totaljs.com\",\n\t\"datum\": 20220210,\n\t\"name\": \"Peter Sirka\"\n}\n```"
-  },
-  {
-    "id": "split",
-    "group": "Array",
-    "name": "Split",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_split_fixed.html",
-    "author": "Total.js",
-    "icon": "ti ti-strikethrough",
-    "color": "",
-    "version": "1.0.1",
-    "kind": "",
-    "readme": "The component splits a message with an array of objects on the input into separate messages with individual objects on the output.\n\n__Input example__:\n\n```js\n[\n\t{\n\t\t\"email\": \"michal@totaljs.com\",\n\t\t\"date\": 20220202,\n\t\t\"name\": \"Michal Klacan\"\n\t},\n\t{\n\t\t\"email\": \"martin@totaljs.com\",\n\t\t\"date\": 20220204,\n\t\t\"name\": \"Martin Smola\"\n\t},\n\t{\n\t\t\"email\": \"peter@totaljs.com\",\n\t\t\"datum\": 20220210,\n\t\t\"name\": \"Peter Sirka\"\n\t}\n]\n```\n\n__Output example__:\n\n```js\n{\n\t\"email\": \"michal@totaljs.com\",\n\t\"date\": 20220202,\n\t\"name\": \"Michal Klacan\"\n}\n```\n\n```js\n{\n\t\"email\": \"martin@totaljs.com\",\n\t\"date\": 20220204,\n\t\"name\": \"Martin Smola\"\n}\n```\n\n```js\n{\n\t\"email\": \"peter@totaljs.com\",\n\t\"datum\": 20220210,\n\t\"name\": \"Peter Sirka\"\n}\n```"
-  },
-  {
-    "id": "consolelog",
-    "group": "Common",
-    "name": "console.log()",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/oficial_console_log.html",
-    "author": "Total.js",
-    "icon": "ti ti-print",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "This component prints a message into the console."
-  },
-  {
     "id": "consolelog_advanced",
     "group": "Common",
     "name": "console.log(advanced)",
@@ -70,18 +10,6 @@
     "version": "1.6.5",
     "kind": "",
     "readme": "# console.log(Advanced)\n\nEnhanced console logging component with configurable output formatting.\n\n\n## Features\n\n- **Timestamp (ISO 8601)**: Adds ISO 8601 formatted timestamp to each log entry\n- **Timezone with dropdown**: Supports both GMT offsets (fixed) and IANA timezone identifiers (with automatic DST)\n- **Source component**: Displays the name of the component sending the message\n- **JSON output**: When enabled, wraps all output in structured JSON format for easy parsing\n- **Array iteration**: Arrays are automatically iterated, logging each element separately\n\n\n## Configuration\n\nAll options are configurable in the component settings:\n\n- **Timestamp (ISO 8601)** - Default: `true` - Include timestamp in output\n- **Timezone** - Default: `UTC` - Supports both IANA timezone identifiers and GMT offset syntax\n- **Source component** - Default: `true` - Include source component name\n- **JSON output** - Default: `false` - Wrap output in structured JSON format\n\n\n## Output Modes\n\n### Plain Text Mode (JSON output = false)\nHuman-readable format with inline JSON. Best for visual inspection of logs.\n- Format: `<timestamp> component: <name>  message: <content>`\n- All content on single lines (no multi-line formatting)\n- Arrays are iterated, each element logged separately\n- Objects are inline JSON strings\n\n### JSON Output Mode (JSON output = true)\nStructured JSON format. Best for log processing tools and parsers (e.g., Logstash, Fluentd).\n- Format: `{\"timestamp\": \"...\", \"component\": \"...\", \"message\": ...}`\n- Each log line is a complete, parseable JSON object\n- Arrays are iterated, each element in its own JSON wrapper\n- Message content preserved as native JSON types (not stringified)"
-  },
-  {
-    "id": "debug",
-    "group": "Common",
-    "name": "Debug",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_debug.html",
-    "author": "Total.js",
-    "icon": "ti ti-circle-alt",
-    "color": "#E73323",
-    "version": "4",
-    "kind": "",
-    "readme": "The component can print the payload of incoming messages and `instance.debug()` log messages in JSON format."
   },
   {
     "id": "flow_variables",
@@ -96,30 +24,6 @@
     "readme": "# Flow Variables\n\nThis component manages Flow variables with GET, SET, and DEL operations. Supports multiple operations in a single execution.\n\n\n## Inputs and Outputs\n- **Input**: Triggers the variable operations (accepts any data)\n- **Output**: Returns combined results in JSON format, always wrapped in `flow_variables_response`\n\n\n## Variables Management\nYou can add multiple variable operations that will be executed sequentially:\n- **Action**: Operation to perform (GET, SET, DEL)\n- **Variable**: Name of the flow variable (mandatory, supports templates)\n- **Value**: Value to set (visible only for SET action, supports templates)\n- **Type**: Return type for GET operation (visible only for GET action: String, Number, Boolean)\n\n\n## Template Support\n\nBoth **Variable** and **Value** fields support dynamic templates with `{{ $data.* }}` syntax.\n\n### Template Syntax:\n- **Static value**: `myVar` → outputs `\"myVar\"`\n- **Dynamic path**: `{{ $data.keyName }}` → reads from `$.data.keyName`\n- **Nested path**: `{{ $data.nested.value }}` → reads from `$.data.nested.value`\n- **Array path**: `{{ $data.items[0].name }}` → reads from `$.data.items[0].name`\n- **Object/Array**: `{{ $data.body }}` → automatically converted to JSON string\n\n### Math Operations:\n- `{{ $data.value + 5 }}` → addition\n- `{{ $data.value - 3 }}` → subtraction\n- `{{ $data.value * 2 }}` → multiplication\n- `{{ $data.value / 2 }}` → division\n\n### Text Concatenation:\n- `{{ $data.prefix }}_key` → `\"value_key\"`\n- `prefix_{{ $data.value }}_suffix` → `\"prefix_value_suffix\"`\n\n### Error Handling:\nUnsupported expressions return `\"<bad expression>\"`:\n- `{{ $data.nonexistent }}` → path doesn't exist\n- `{{ $data.text + 5 }}` → cannot add number to string\n- `{{ $data.nested.invalid }}` → invalid nested path\n\n\n## Multiple Operations\n\nThe component processes all configured rows sequentially. You can mix GET, SET, and DEL operations in a single execution:\n\n**Example Configuration**:\n1. Row 1: GET \"counter\" as Number\n2. Row 2: SET \"lastAccess\" to \"{{ $data.timestamp }}\"\n3. Row 3: DEL \"tempData\"\n\n\n## Behavior Notes\n- Variables are stored at the Flow level and persist across component executions\n- Variable names are case-sensitive\n- All responses are wrapped in `flow_variables_response` object\n- GET operation applies type conversion to returned values based on the selected Type\n- Number conversion uses `parseFloat()` - if conversion fails, original value is returned\n- Boolean conversion for strings recognizes: 'true', '1', 'yes' (case-insensitive) as `true`\n- Template expressions are resolved before operations are performed\n- All rows are processed sequentially in the order they appear\n- Operations that modify variables (SET/DEL) trigger `instance.newvariables()` to notify the system\n- When \"Forward input data\" is enabled, the response includes both `forwarded_data` and `flow_variables_response`\n- Forwarding is useful for passing data through the component while also performing variable operations\n- This component operates on `instance.main.variables` which are Flow-level variables\n\nFor more information about Flow variables, see:\nhttps://docs.totaljs.com/flowstream/d27dc002rl50c/#d27e2001rl51c"
   },
   {
-    "id": "request",
-    "group": "Common",
-    "name": "HTTP Request",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_http_request.html",
-    "author": "Total.js",
-    "icon": "ti ti-cloud-download",
-    "color": "",
-    "version": "7",
-    "kind": "",
-    "readme": "The component makes a HTTP request. The response data will be serialized as the payload.\n\n__Response__:\n\n```json\n{\n\tstatus: Number,\n\theaders: { key: value },\n\tcookies: { key: value },\n\thost: String,\n\tbody: String/Object/Buffer\n}\n```"
-  },
-  {
-    "id": "mergeinputs",
-    "group": "Common",
-    "name": "Merge inputs",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_merge_inputs.html",
-    "author": "Total.js",
-    "icon": "ti ti-filter",
-    "color": "",
-    "version": "1.1.0",
-    "kind": "",
-    "readme": "This component merges multiple inputs into one object."
-  },
-  {
     "id": "rest_module",
     "group": "Common",
     "name": "REST module",
@@ -130,18 +34,6 @@
     "version": "1.3.3",
     "kind": "",
     "readme": "### REST module\n\nA flexible HTTP client component for making REST API requests with dynamic template support.\n\n## Features\n- **HTTP Methods**: GET, POST, PUT, PATCH, DELETE, HEAD\n- **Dynamic Templates**: Support for `{{ $FLOW_VARS.* }}` and `{{ $data.* }}` in URL, headers, query parameters, and body\n- **Response Configuration**: Choose which parts of the response to return (status code, headers, body)\n- **Data Forwarding**: Preserve original input data and optionally combine responses when chaining multiple REST modules\n- **Retry Logic**: Configurable retry attempts for 5xx errors\n- **SSL Options**: Option to ignore SSL certificate validation\n- **Debug Logging**: Separate request and response debugging to server console\n\n## Dynamic Template Syntax\nThe following fields support template variables:\n- **URL**: Full URL with dynamic values\n- **Query Parameters**: Both keys and values support templates\n- **Headers**: Both keys and values support templates\n- **Body**: Full body content with template support\n\n### Template Examples:\n- `{{ $FLOW_VARS.api_token }}` - Read from global variables\n- `{{ $data.user_id }}` - Read from input data\n- `{{ $data.items[0].name }}` - Access nested arrays and objects\n- `{{ $data.count + 5 }}` - Math operations (+, -, *, /)\n\n### Usage in Body:\n```json\n{\n  \"userId\": \"{{ $data.user_id }}\",\n  \"token\": \"{{ $FLOW_VARS.api_token }}\",\n  \"embeddings\": [{{ $data.embeddings[0] }}],\n  \"count\": {{ $data.count + 1 }}\n}\n```\n\n## Response Configuration\nSelect which parts of the HTTP response to include:\n- **Status code**: HTTP status code (e.g., 200, 404, 500)\n- **Headers**: Response headers object\n- **Body**: Response body (automatically parsed if JSON)\n\n## Output Structure\nDefault (Body only):\n```json\n{\n  \"rest_response\": {\n    \"body\": { ... }\n  }\n}\n```\n\nWith all response options enabled:\n```json\n{\n  \"rest_response\": {\n    \"status\": 200,\n    \"headers\": { ... },\n    \"body\": { ... }\n  }\n}\n```\n\nWith \"Forward input data\" enabled:\n```json\n{\n  \"forwarded_data\": { ... original input ... },\n  \"rest_response\": { ... }\n}\n```\n\nWith both \"Forward input data\" and \"Forward response\" enabled (chaining multiple REST modules):\n```json\n{\n  \"forwarded_data\": { ... original input ... },\n  \"rest_response\": [\n    { ... first module response ... },\n    { ... second module response ... }\n  ]\n}\n```\n\n## Data Forwarding Behavior\n- **Forward input data**: Preserves the original input data through the chain of REST modules\n  - First module: Creates `forwarded_data` from input\n  - Subsequent modules: Maintains the same `forwarded_data` without nesting\n- **Forward response**: Combines responses from multiple REST modules into an array\n  - Enables accessing previous responses: `$data.rest_response[0]`, `$data.rest_response[1]`, etc.\n  - Useful for chaining API calls where later calls need data from earlier responses\n\n## Additional Options\n- **Timeout**: Request timeout in milliseconds (default: 10000)\n- **Max. size**: Response maximum size in bytes (default: 512000)\n- **Retry attempts**: Number of retries for 5xx errors (default: 0)\n- **Ignore SSL**: Skip SSL certificate validation\n\n## Debug Output\n- **Requests**: Logs URL, method, headers (with auth masked), query params, and body\n- **Responses**: Logs status code, headers, and response body\n- Debug prints to server-side Node.js log or docker log output (not browser console)"
-  },
-  {
-    "id": "switch",
-    "group": "Common",
-    "name": "Switch",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_switch.html",
-    "author": "Total.js",
-    "icon": "ti ti-sitemap",
-    "color": "",
-    "version": "4",
-    "kind": "",
-    "readme": "## Source and Path\nUse the **Source** dropdown to select where to look for the value to use in the conditions check.\nSet a **Path** if the value is not the data itself. It supports dot notation: `position.longitude` or `sensor.0.value` for arrays, it does not support `sensor[0].value`.\n**Expression** supports javascript syntax. Should return a value which will be used in condition check as `data`. Available variables: data, repo, variables, variables2\n**Expressions example:**\n```js\ndata.value - variables.offset\n```\n\n## Conditions\nEach of the **Conditions** corresponds to an output in the exact same order. First condition -> First output.\n\n**Operator**\nNot all operators work on all data types. For example it is not possible to use `&gt;` or `&lt;` for strings, etc.\n*index of* only works for data of type array or string.\n**Expression operator**\nIn this case the **type** field is ignored and the expression in the **value** field must return `true` or `false`. Available variables: data, repo, variables, variables2.\nExpressions operator example:\n```js\ndata.value > variables.threshold;\n```\nor with a conditions\n```js\nif (typeof data.value !== 'number') return false; else return data.value > parseInt(variables.threshold);\n```\n\n**Expression type**\nThe expression in the **value** field must return a value which will be used in the given operation. Available variables: data, repo, variables, variables2.\nExpressions example:\n```js\ndata.value - variables.offset\n```\n\n**Between operator** only works with datatype number and the value must be two comma separated values. e.g.: `2,4` so the condition becomes `val &gt; 2 && val &lt; 4`"
   },
   {
     "id": "switch_advanced",
@@ -156,66 +48,6 @@
     "readme": "### Switch [advanced]"
   },
   {
-    "id": "culvv6d7fe",
-    "group": "Common",
-    "name": "Your component name",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_code.html",
-    "author": "Total.js",
-    "icon": "ti ti-code",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "Markdown readme\n\n```js\nvar total = 'Hello world!';\n```"
-  },
-  {
-    "id": "culvv6d7fe",
-    "group": "Common",
-    "name": "Your component name",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_core_template.html",
-    "author": "Total.js",
-    "icon": "ti ti-code",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "Markdown readme\n\n```js\nvar total = 'Hello world!';\n```"
-  },
-  {
-    "id": "culvv6d7fe",
-    "group": "Common",
-    "name": "Your component name",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_macro.html",
-    "author": "Total.js",
-    "icon": "ti ti-code",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "Markdown readme\n\n```js\nvar total = 'Hello world!';\n```"
-  },
-  {
-    "id": "culvv6d7fe",
-    "group": "Common",
-    "name": "Your component name",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_transformer.html",
-    "author": "Total.js",
-    "icon": "ti ti-code",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "Markdown readme\n\n```js\nvar total = 'Hello world!';\n```"
-  },
-  {
-    "id": "object",
-    "group": "Data",
-    "name": "Object",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_object.html",
-    "author": "Total.js",
-    "icon": "ti ti-list-alt",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "The component creates an object from the defined string (Tangular) template. With the help of the Tangular template engine, you can use conditions, loops, etc..\n\n__Available markup__:\n\n- `{{ data.key }}` represents data\n- `{{ variables.key }}` represents local and global Flow variables\n- `{{ hostname }}` contains a current URL address to the main Flow app `{String}`\n- `{{ url }}` contains a current URL address to the current Flow `{String}`\n- `{{ env }}` contains a current environment `{String}`"
-  },
-  {
     "id": "elasticsearch_docs",
     "group": "Databases",
     "name": "Elasticsearch [Docs]",
@@ -226,30 +58,6 @@
     "version": "1.4.0",
     "kind": "",
     "readme": "# Elasticsearch [Docs]\n\tThis component provides integration with Elasticsearch for document operations via REST API.\n\t\n\n\t## Configuration\n\t\n\t### Request settings\n\t- **Operation:** Select the Elasticsearch operation to perform\n\t\t- **Get:** Retrieve a single document by ID (requires Doc Id)\n\t\t- **Get many:** Retrieve multiple documents (no Doc Id field)\n\t\t- **Exists:** Check if a document exists (requires Doc Id, returns HEAD response)\n\t\t- **Index:** Create a new document with specified ID (requires Doc Id)\n\t\t- **Delete:** Delete a document by ID (requires Doc Id)\n\t\t- **Update:** Update an existing document (requires Doc Id)\n\t\t- **Search by query:** Search for documents matching a query (no Doc Id field)\n\t\t- **Delete by query:** Delete documents matching a query (no Doc Id field)\n\t\t- **Update by query:** Update documents matching a query (no Doc Id field)\n\t- **Index:** Elasticsearch index name (required, supports templates)\n\t- **Doc Id:** Document ID (required for Get, Exists, Index, Delete, Update operations; hidden for Get many, Search by query, Update by query, Delete by query operations; supports templates)\n\t- **Query Parameters:** Additional URL query parameters as key-value pairs\n\t- **Headers:** Custom HTTP headers as key-value pairs\n\t\n\t### Request body\n\t- **Body:** JSON body for operations that support it (Index, Update, Get many, Search by query, Update by query, Delete by query)\n\t- **Example:** Dynamic visual reference showing operation-specific examples and template usage (changes based on selected operation)\n\t\n\t### Additional Options\n\t- **Max. size:** Response maximum size in bytes (default: 512000)\n\t- **Timeout:** Request timeout in milliseconds (default: 10000)\n\t- **Retry attempts:** Number of retry attempts if request fails (default: 0). If set to a value greater than 0, the component will retry the request after waiting for the timeout duration between each attempt.\n\t- **Ignore SSL:** Skip SSL certificate validation for HTTPS connections\n\t\n\n\t## Template Support\n\t\n\tAll Instance settings, Request settings fields (Index, Doc Id, Query Parameters, Headers), and Request body support template syntax:\n\t\n\t### Template Syntax:\n\t- **Flow variables:** `{{ $FLOW_VARS.variable_name }}` → reads from flow variables\n\t- **Full payload:** `{{ $data }}` → entire input data as JSON string\n\t- **Input data path:** `{{ $data.key }}` → reads from `$.data.key`\n\t- **Nested path:** `{{ $data.nested.value }}` → reads from `$.data.nested.value`\n\n\t### Advanced Template Examples:\n\n\t**Using {{ $data(objArray) }} for bulk operations:**\n\t\n\tInput data (array of objects):\n\t```json\n\t{\n\t\t\"data\": \t[\n\t\t\t{ \"field1\": \"value1\", \"field2\": 123 },\n\t\t\t{ \"field1\": \"value2\", \"field2\": 456 }\n\t\t]\n\t}\n\t```\n\t\n\tBody with `{{ $data(objArray) }}`:\n\t\n\tResults in:\n\t```json\n\t{ \"field1\": \"value1\", \"field2\": 123 },\n\t{ \"field1\": \"value2\", \"field2\": 456 }\n\t```\n\t\n\n\t## Outputs\n\t- **Output:** Successful response (HTTP 2xx) with parsed JSON body\n\t\t- For Exists operation: `{ exists: true }` or `{ exists: false }`\n\t- **Error:** Error response with status, headers, and body details\n\t\n\t\n\t## Behavior\n\t- Component is triggered by any input request\n\t- Resolves all template expressions before executing the request\n\t- Automatically adds Basic Authentication header when enabled\n\t- Parses JSON responses automatically\n\t- Sends successful responses (2xx) to output\n\t- Sends error responses to error output\n\t- Debug logging can be enabled for detailed request/response information\n\t- Retry logic: If retry attempts > 0, the component will automatically retry failed requests (network errors or non-2xx HTTP status codes). It waits for the timeout duration between each retry attempt. For example, with retry attempts = 3 and timeout = 10000ms, the component will make up to 4 total attempts (1 initial + 3 retries), waiting 10 seconds between each attempt."
-  },
-  {
-    "id": "elasticsearch_docs",
-    "group": "Databases",
-    "name": "Elasticsearch [Docs]",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Databases/Elasticsearch/databases_elasticsearch_1.3.3.html",
-    "author": "Total.js",
-    "icon": "ti ti-server",
-    "color": "",
-    "version": "1.3.3",
-    "kind": "",
-    "readme": "# Elasticsearch [Docs]\nThis component provides integration with Elasticsearch for document operations via REST API.\n\n## Elasticsearch API Documentation\n- https://www.elastic.co/guide/en/elasticsearch/reference/current/docs.html\n- https://www.elastic.co/guide/en/elasticsearch/reference/current/rest-apis.html\n\n## Configuration\n\n### Instance settings\n- **Hostname:** Elasticsearch host (supports templates like `{{ $FLOW_VARS.elasticsearch_host }}`)\n- **Port:** Elasticsearch port (default: 9200, supports templates like `{{ $FLOW_VARS.elasticsearch_port }}`)\n- **Basic Authentication:** Enable/disable basic authentication (default: true)\n  - **Username:** Authentication username (supports templates)\n  - **Password:** Authentication password (supports templates)\n\n### Request settings\n- **Operation:** Select the Elasticsearch operation to perform\n  - **Get:** Retrieve a single document by ID (requires Doc Id)\n  - **Get many:** Retrieve multiple documents (no Doc Id field)\n  - **Exists:** Check if a document exists (requires Doc Id, returns HEAD response)\n  - **Index:** Create a new document with specified ID (requires Doc Id)\n  - **Delete:** Delete a document by ID (requires Doc Id)\n  - **Update:** Update an existing document (requires Doc Id)\n  - **Search by query:** Search for documents matching a query (no Doc Id field)\n  - **Delete by query:** Delete documents matching a query (no Doc Id field)\n  - **Update by query:** Update documents matching a query (no Doc Id field)\n- **Index:** Elasticsearch index name (required, supports templates)\n- **Doc Id:** Document ID (required for Get, Exists, Index, Delete, Update operations; hidden for Get many, Search by query, Update by query, Delete by query operations; supports templates)\n- **Query Parameters:** Additional URL query parameters as key-value pairs\n- **Headers:** Custom HTTP headers as key-value pairs\n\n### Request body\n- **Body:** JSON body for operations that support it (Index, Update, Get many, Search by query, Update by query, Delete by query)\n- **Example:** Dynamic visual reference showing operation-specific examples and template usage (changes based on selected operation)\n\n### Additional Options\n- **Max. size:** Response maximum size in bytes (default: 512000)\n- **Timeout:** Request timeout in milliseconds (default: 10000)\n- **Retry attempts:** Number of retry attempts if request fails (default: 0). If set to a value greater than 0, the component will retry the request after waiting for the timeout duration between each attempt.\n- **Ignore SSL:** Skip SSL certificate validation for HTTPS connections\n\n### Component Debug\n- **Requests:** Log request details to server console\n- **Responses:** Log response details to server console\n\n## Operations Mapping\n\n```\nGet              => GET    <Hostname>:<Port>/<Index>/_doc/<Doc Id>\nGet many         => POST   <Hostname>:<Port>/<Index>/_mget\nExists           => HEAD   <Hostname>:<Port>/<Index>/_doc/<Doc Id>\nIndex            => POST   <Hostname>:<Port>/<Index>/_create/<Doc Id>\nDelete           => DELETE <Hostname>:<Port>/<Index>/_doc/<Doc Id>\nUpdate           => POST   <Hostname>:<Port>/<Index>/_update/<Doc Id>\nSearch by query  => POST   <Hostname>:<Port>/<Index>/_search\nUpdate by query  => POST   <Hostname>:<Port>/<Index>/_update_by_query\nDelete by query  => POST   <Hostname>:<Port>/<Index>/_delete_by_query\n```\n\n## Template Support\n\nAll Instance settings, Request settings fields (Index, Doc Id, Query Parameters, Headers), and Request body support template syntax:\n\n### Template Syntax:\n- **Flow variables:** `{{ $FLOW_VARS.variable_name }}` → reads from flow variables\n- **Input data path:** `{{ $data.key }}` → reads from `$.data.key`\n- **Nested path:** `{{ $data.nested.value }}` → reads from `$.data.nested.value`\n- **Full payload:** `{{ $data }}` → entire input data as JSON string\n- **Object list inline:** `{{ $data(objList) }}` → if data is an object containing objects as values, returns them inline without outer braces (comma-separated). Returns `<bad expression (not list of objects)>` if data is not a valid object list.\n- **Object array inline:** `{{ $data(objArray) }}` → if data is an array of objects, returns them inline without outer brackets (comma-separated). Returns `<bad expression (not array of objects)>` if data is not a valid object array.\n- **Static value:** `my-index` → outputs `\"my-index\"`\n\n### Math Operations:\n- `{{ $data.value + 5 }}` → addition\n- `{{ $data.value - 3 }}` → subtraction\n- `{{ $data.value * 2 }}` → multiplication\n- `{{ $data.value / 2 }}` → division\n\n### Text Concatenation:\n- `{{ $FLOW_VARS.prefix }}_index` → `\"prod_index\"`\n- `doc_{{ $data.id }}` → `\"doc_12345\"`\n\n### Error Handling:\nInvalid expressions return `\"<bad expression>\"`:\n- `{{ $FLOW_VARS.nonexistent }}` → variable doesn't exist\n- `{{ $data.nonexistent }}` → path doesn't exist\n\nSpecial validation errors:\n- `{{ $data(objList) }}` → returns `<bad expression (not list of objects)>` if data is not an object containing objects as values\n- `{{ $data(objArray) }}` → returns `<bad expression (not array of objects)>` if data is not an array of objects\n\n### Advanced Template Examples:\n\n**Using {{ $data(objList) }} for bulk operations:**\n\nInput data (object with objects as values):\n```json\n{\n  \"item1\": { \"field1\": \"value1\", \"field2\": 123 },\n  \"item2\": { \"field1\": \"value2\", \"field2\": 456 }\n}\n```\n\nBody with `{{ $data(objList) }}`:\n```json\n{\n  \"docs\": [\n    {{ $data(objList) }}\n  ]\n}\n```\n\nResults in:\n```json\n{\n  \"docs\": [\n    { \"field1\": \"value1\", \"field2\": 123 },\n    { \"field1\": \"value2\", \"field2\": 456 }\n  ]\n}\n```\n\n**Using {{ $data(objArray) }} for bulk operations:**\n\nInput data (array of objects):\n```json\n[\n  { \"field1\": \"value1\", \"field2\": 123 },\n  { \"field1\": \"value2\", \"field2\": 456 }\n]\n```\n\nBody with `{{ $data(objArray) }}`:\n```json\n{\n  \"docs\": [\n    {{ $data(objArray) }}\n  ]\n}\n```\n\nResults in:\n```json\n{\n  \"docs\": [\n    { \"field1\": \"value1\", \"field2\": 123 },\n    { \"field1\": \"value2\", \"field2\": 456 }\n  ]\n}\n```\n\n## Example Usage\n\nThe component provides operation-specific examples in the UI that update dynamically when you change the Operation dropdown. These examples show the appropriate request structure and query parameters for each operation type.\n\n### Index a Document\n```\nOperation: Index\nIndex: my-logs\nDoc Id: {{ $data.logId }}\nBody:\n{\n  \"timestamp\": \"{{ $data.timestamp }}\",\n  \"level\": \"{{ $data.level }}\",\n  \"message\": \"{{ $data.message }}\"\n}\n```\n\n### Get a Document\n```\nOperation: Get\nIndex: my-logs\nDoc Id: {{ $data.logId }}\n```\n\n### Get Many Documents (using objArray template)\n```\nOperation: Get many\nIndex: my-logs\nBody:\n{\n  \"docs\": [\n    {{ $data(objArray) }}\n  ]\n}\n\nInput data example:\n[\n  { \"_id\": \"doc1\" },\n  { \"_id\": \"doc2\" },\n  { \"_id\": \"doc3\" }\n]\n```\n\n### Search by Query\n```\nOperation: Search by query\nIndex: my-logs\nBody:\n{\n  \"query\": {\n    \"match\": {\n      \"status\": \"active\"\n    }\n  }\n}\n```\n\n### Update by Query\n```\nOperation: Update by query\nIndex: my-logs\nBody:\n{\n  \"script\": {\n    \"source\": \"ctx._source.processed = true\"\n  },\n  \"query\": {\n    \"term\": {\n      \"status\": \"pending\"\n    }\n  }\n}\n```\n\n## Outputs\n- **Output:** Successful response (HTTP 2xx) with parsed JSON body\n  - For Exists operation: `{ exists: true }` or `{ exists: false }`\n- **Error:** Error response with status, headers, and body details\n\n## Behavior\n- Component is triggered by any input request\n- Resolves all template expressions before executing the request\n- Automatically adds Basic Authentication header when enabled\n- Parses JSON responses automatically\n- Sends successful responses (2xx) to output\n- Sends error responses to error output\n- Debug logging can be enabled for detailed request/response information\n- Retry logic: If retry attempts > 0, the component will automatically retry failed requests (network errors or non-2xx HTTP status codes). It waits for the timeout duration between each retry attempt. For example, with retry attempts = 3 and timeout = 10000ms, the component will make up to 4 total attempts (1 initial + 3 retries), waiting 10 seconds between each attempt."
-  },
-  {
-    "id": "elasticsearch_docs",
-    "group": "Databases",
-    "name": "Elasticsearch [Docs]",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Databases/Elasticsearch/databases_elasticsearch_1.3.4.html",
-    "author": "Total.js",
-    "icon": "ti ti-server",
-    "color": "",
-    "version": "1.3.4",
-    "kind": "",
-    "readme": "# Elasticsearch [Docs]\nThis component provides integration with Elasticsearch for document operations via REST API."
   },
   {
     "id": "redis",
@@ -264,82 +72,10 @@
     "readme": "# Redis\nThis component provides integration with Redis database instances, supporting various operations for data storage and retrieval.\n\n\n## Inputs and Outputs\n- **Input**: Triggers the Redis operation (accepts any data)\n- **Output**: Returns the operation result wrapped in `redis_response` object (or error object if operation fails)\n\n\n## Behavior Notes\n- Component requires the `redis` npm package\n- Component is triggered by any input request\n- Establishes connection to Redis instance with configured settings\n- Returns the operation result wrapped in `redis_response` object\n- Automatically handles connection management and error handling\n- Template expressions are resolved before executing Redis commands\n- Invalid template expressions return `\"<bad expression>\"`\n- Connection is reused across multiple operations\n\n\n### Templates supported syntax:\n- **Static value**: `mykey` → outputs `\"mykey\"`\n- **Dynamic path**: `{{ $data.keyName }}` → reads from `$.data.keyName`\n- **Nested path**: `{{ $data.nested.value }}` → reads from `$.data.nested.value`\n- **Array path**: `{{ $data.items[0].name }}` → reads from `$.data.items[0].name`\n- **Object/Array**: `{{ $data.body }}` → automatically converted to JSON string\n\n\n### Templates Math Operations:\n- `{{ $data.value + 5 }}` → addition\n- `{{ $data.value - 3 }}` → subtraction\n- `{{ $data.value * 2 }}` → multiplication\n- `{{ $data.value / 2 }}` → division\n\n\n### Templates Text Concatenation:\n- `{{ $data.prefix }}_key` → `\"value_key\"`\n- `prefix_{{ $data.value }}_suffix` → `\"prefix_value_suffix\"`\n\n\n### Templates Error Handling:\nUnsupported expressions return `\"<bad expression>\"`:\n- `{{ $data.nonexistent }}` → path doesn't exist\n- `{{ $data.text + 5 }}` → cannot add number to string\n- `{{ $data.nested.invalid }}` → invalid nested path"
   },
   {
-    "id": "filewatcher",
-    "group": "Files",
-    "name": "File Watcher",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_file_watcher.html",
-    "author": "Total.js",
-    "icon": "ti ti-recycle",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "The component watches the existence of the file, then reads the content and sends it next. The file will be removed automatically after reading."
-  },
-  {
-    "id": "filewriter",
-    "group": "Files",
-    "name": "File Writer",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_file_writer.html",
-    "author": "Total.js",
-    "icon": "ti ti-pencil",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "The component writes incoming data into the file."
-  },
-  {
-    "id": "genesys_api",
-    "group": "Genesys",
-    "name": "Genesys [API]",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Genesys/api-166.html",
-    "author": "Total.js",
-    "icon": "ti ti-code-branch",
-    "color": "",
-    "version": "1.6.6",
-    "kind": "",
-    "readme": "# Genesys API\nhttps://developer.genesys.cloud/devapps/api-explorer\nThis component handles HTTP requests to the Genesys PureCloud API with configurable regions, methods, headers, query parameters, and body.\n\n## Dynamic Value Templates\nThe following fields support template syntax to read from input data, perform math operations, and concatenate text:\n- **Path**\n- **Query Parameters** (both keys and values)\n- **Headers** (both keys and values)\n- **Body**\n\n\n### Template Syntax:\n- **Static value**: `SomeText` → outputs `\"SomeText\"`\n- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1`\n- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21`\n- **Array path**: `{{ $data.key3[0].key31 }}` → reads from `$.data.key3[0].key31`\n\n\n### Math Operations:\n- `{{ $data.key4 + 5 }}` → addition\n- `{{ $data.key4 - 3 }}` → subtraction\n- `{{ $data.key4 * 2 }}` → multiplication\n- `{{ $data.key4 / 2 }}` → division\n\n\n### Text Concatenation:\n- `{{ $data.key1 }} test1` → `\"value1 test1\"`\n- `prefix_{{ $data.key1 }}_suffix` → `\"prefix_value1_suffix\"`\n\n\n### Error Handling:\nUnsupported expressions return `\"<bad expression>\"`:\n- `{{ $data.nonexistent }}` → path doesn't exist\n- `{{ $data.key1 + 5 }}` → cannot add number to string\n- `{{ $data.key2.invalid }}` → invalid nested path\n\n\n## Query Parameters Support\nThe component supports query parameters with template support:\n- **Query Parameters**: Key-value pairs added to the URL query string (supports templates in both keys and values)\n\nQuery parameters are automatically URL-encoded and appended to the path:\n- If path has no query string: `?key1=value1&key2=value2`\n- If path already has query string: `&key1=value1&key2=value2`\n\nTemplate expressions in query parameters:\n- Support `{{ $data.* }}` syntax for dynamic values\n- Both keys and values support templates\n- Values are automatically URL-encoded\n\n\n## Additional Options\n- **Timeout**: Request timeout in milliseconds (default: 10000)\n- **Max. size**: Response maximum size in bytes (default: 512000)\n\n\n## Inputs and Outputs\n- **Input**: Triggers the HTTP request (accepts any data)\n- **Output**: Returns response body in JSON format for HTTP 200 responses\n- **Error**: Returns error details for non-200 responses or request failures\n\n\n## Behavior\n- Triggered by any input request\n- Constructs full URL from region and path\n- Applies query parameters to the URL if specified\n- Applies timeout and size limit settings\n- Applies template resolution to path, query parameters, headers, and body\n- Sends HTTP request with configured method, headers, and body\n- Automatically sets Content-Type to application/json for JSON bodies\n- Returns parsed JSON response on success (HTTP 200)\n- Returns error details with status, headers, and body for failures\n- Debug logging can be enabled for requests and responses"
-  },
-  {
-    "id": "genesys_api",
-    "group": "Genesys",
-    "name": "Genesys [API]",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Genesys/genesys_api 171.html",
-    "author": "Total.js",
-    "icon": "ti ti-code-branch",
-    "color": "",
-    "version": "1.7.1",
-    "kind": "",
-    "readme": "# Genesys API\nhttps://developer.genesys.cloud/devapps/api-explorer\nThis component handles HTTP requests to the Genesys PureCloud API with configurable regions, methods, headers, query parameters, and body.\n\n## Dynamic Value Templates\nThe following fields support template syntax to read from global variables, input data, perform math operations, and concatenate text:\n- **Path**\n- **Query Parameters** (both keys and values)\n- **Headers** (both keys and values)\n- **Body**\n\n\n### Template Syntax:\n- **Global variables**: `{{ $FLOW_VARS.key }}` → reads from global variables (e.g., `{{ $FLOW_VARS.genesys_access_token }}`)\n- **Static value**: `SomeText` → outputs `\"SomeText\"`\n- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1`\n- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21`\n- **Array path**: `{{ $data.key3[0].key31 }}` → reads from `$.data.key3[0].key31`\n\n\n### Examples:\n- Authorization header: `bearer {{ $FLOW_VARS.genesys_access_token }}`\n- Query parameter: `pageSize={{ $data.pageSize }}`\n- Path with variable: `/api/v2/users/{{ $data.userId }}`\n\n\n### Math Operations:\n- `{{ $data.key4 + 5 }}` → addition\n- `{{ $data.key4 - 3 }}` → subtraction\n- `{{ $data.key4 * 2 }}` → multiplication\n- `{{ $data.key4 / 2 }}` → division\n\n\n### Text Concatenation:\n- `{{ $data.key1 }} test1` → `\"value1 test1\"`\n- `prefix_{{ $data.key1 }}_suffix` → `\"prefix_value1_suffix\"`\n- `bearer {{ $FLOW_VARS.token }}` → `\"bearer abc123...\"`\n\n\n### Error Handling:\nUnsupported expressions return `\"<bad expression>\"`:\n- `{{ $FLOW_VARS.nonexistent }}` → variable doesn't exist\n- `{{ $data.nonexistent }}` → path doesn't exist\n- `{{ $data.key1 + 5 }}` → cannot add number to string\n- `{{ $data.key2.invalid }}` → invalid nested path\n\n\n## Query Parameters Support\nThe component supports query parameters with template support:\n- **Query Parameters**: Key-value pairs added to the URL query string (supports templates in both keys and values)\n\nQuery parameters are automatically URL-encoded and appended to the path:\n- If path has no query string: `?key1=value1&key2=value2`\n- If path already has query string: `&key1=value1&key2=value2`\n\nTemplate expressions in query parameters:\n- Support `{{ $FLOW_VARS.* }}` syntax for global variables\n- Support `{{ $data.* }}` syntax for dynamic values\n- Both keys and values support templates\n- Values are automatically URL-encoded\n\n\n## Additional Options\n- **Timeout**: Request timeout in milliseconds (default: 10000)\n- **Max. size**: Response maximum size in bytes (default: 512000)\n\n\n## Inputs and Outputs\n- **Input**: Triggers the HTTP request (accepts any data)\n- **Output**: Returns response body in JSON format for HTTP 200 responses\n- **Error**: Returns error details for non-200 responses or request failures\n\n\n## Behavior\n- Triggered by any input request\n- Constructs full URL from region and path\n- Resolves templates in path, query parameters, headers, and body (supports `$FLOW_VARS` and `$data`)\n- Applies query parameters to the URL if specified\n- Applies timeout and size limit settings\n- Sends HTTP request with configured method, headers, and body\n- Automatically sets Content-Type to application/json for JSON bodies\n- Returns parsed JSON response on success (HTTP 200)\n- Returns error details with status, headers, and body for failures\n- Debug logging can be enabled for requests and responses\n\n## Debug Output\nWhen \"Requests\" debug is enabled, the following information is logged to the server console:\n- URL (with resolved path and query parameters)\n- HTTP Method\n- Headers (with Authorization masked for security)\n- Query Parameters (if configured)\n- Body (prettified JSON if applicable)\n- Timeout and limit values\n- Note if body was configured but not sent (for GET/HEAD requests)"
-  },
-  {
     "id": "genesys_api",
     "group": "Genesys",
     "name": "Genesys [API]",
     "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Genesys/genesys_api.html",
-    "author": "Total.js",
-    "icon": "ti ti-code-branch",
-    "color": "",
-    "version": "1.8.1",
-    "kind": "",
-    "readme": "# Genesys API\nhttps://developer.genesys.cloud/devapps/api-explorer\nThis component handles HTTP requests to the Genesys PureCloud API with configurable regions, methods, headers, query parameters, and body.\n\n## Features\n- **Region Support**: All Genesys PureCloud regions (US, EU, AP, CA, SA, ME)\n- **HTTP Methods**: GET, POST, PUT, PATCH, DELETE, HEAD\n- **Dynamic Values**: Template support for paths, headers, query parameters, and body with `{{ }}` syntax\n- **Query Parameters**: Key-value pairs with template support\n- **Retry Logic**: Configurable retry attempts for 5xx errors and automatic 429 rate limit handling\n- **SSL Options**: Option to ignore SSL certificate validation\n- **Debug Logging**: Separate request and response debugging to server console\n- **Forward Input Data**: Optional forwarding of input data alongside API response\n\n## Dynamic Value Templates\nThe following fields support template syntax to read from global variables, input data, perform math operations, and concatenate text:\n- **Path**\n- **Query Parameters** (both keys and values)\n- **Headers** (both keys and values)\n- **Body**\n\n\n### Template Syntax:\n- **Global variables**: `{{ $FLOW_VARS.key }}` → reads from global variables (e.g., `{{ $FLOW_VARS.genesys_access_token }}`)\n- **Static value**: `SomeText` → outputs `\"SomeText\"`\n- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1`\n- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21`\n- **Array path**: `{{ $data.key3[0].key31 }}` → reads from `$.data.key3[0].key31`\n\n\n### Examples:\n- Authorization header: `bearer {{ $FLOW_VARS.genesys_access_token }}`\n- Query parameter: `pageSize={{ $data.pageSize }}`\n- Path with variable: `/api/v2/users/{{ $data.userId }}`\n\n\n### Math Operations:\n- `{{ $data.key4 + 5 }}` → addition\n- `{{ $data.key4 - 3 }}` → subtraction\n- `{{ $data.key4 * 2 }}` → multiplication\n- `{{ $data.key4 / 2 }}` → division\n\n\n### Text Concatenation:\n- `{{ $data.key1 }} test1` → `\"value1 test1\"`\n- `prefix_{{ $data.key1 }}_suffix` → `\"prefix_value1_suffix\"`\n- `bearer {{ $FLOW_VARS.token }}` → `\"bearer abc123...\"`\n\n\n### Error Handling:\nUnsupported expressions return `\"<bad expression>\"`:\n- `{{ $FLOW_VARS.nonexistent }}` → variable doesn't exist\n- `{{ $data.nonexistent }}` → path doesn't exist\n- `{{ $data.key1 + 5 }}` → cannot add number to string\n- `{{ $data.key2.invalid }}` → invalid nested path\n\n\n## Query Parameters Support\nThe component supports query parameters with template support:\n- **Query Parameters**: Key-value pairs added to the URL query string (supports templates in both keys and values)\n\nQuery parameters are automatically URL-encoded and appended to the path:\n- If path has no query string: `?key1=value1&key2=value2`\n- If path already has query string: `&key1=value1&key2=value2`\n\nTemplate expressions in query parameters:\n- Support `{{ $FLOW_VARS.* }}` syntax for global variables\n- Support `{{ $data.* }}` syntax for dynamic values\n- Both keys and values support templates\n- Values are automatically URL-encoded\n\n\n## Additional Options\n- **Timeout**: Request timeout in milliseconds (default: 10000)\n- **Max. size**: Response maximum size in bytes (default: 512000)\n- **Retry attempts**: Number of retries for 5xx errors (default: 0)\n- **429 Rate Limit Handling**: Automatic single retry using `retry-after` header (ignores configured timeout and retry settings). Adds random 10-30 second buffer to prevent thundering herd.\n\n\n## Inputs and Outputs\n- **Input**: Triggers the HTTP request (accepts any data)\n- **Output**: Returns response wrapped in `genesys_response` object. When \"Forward input data\" is enabled, also includes `forwarded_data` with the original input data.\n- **Error**: Returns error details for non-200 responses or request failures\n\n\n## Output Structure\nWhen \"Forward input data\" is disabled (default):\n```json\n{\n  \"genesys_response\": { ... API response ... }\n}\n```\n\nWhen \"Forward input data\" is enabled:\n```json\n{\n  \"forwarded_data\": { ... original input data ... },\n  \"genesys_response\": { ... API response ... }\n}\n```\n\n\n## Behavior\n- Triggered by any input request\n- Constructs full URL from region and path\n- Resolves templates in path, query parameters, headers, and body (supports `$FLOW_VARS` and `$data`)\n- Applies query parameters to the URL if specified\n- Applies timeout and size limit settings\n- Sends HTTP request with configured method, headers, and body\n- Automatically sets Content-Type to application/json for JSON bodies\n- Returns parsed JSON response wrapped in `genesys_response` on success (HTTP 200)\n- Optionally includes `forwarded_data` with original input when enabled\n- Returns error details with status, headers, and body for failures\n- **429 Rate Limit**: Automatically retries once after the duration specified in `retry-after` header (in seconds) plus a random 10-30 second buffer to prevent thundering herd\n- **5xx Errors**: Retries based on configured retry attempts using the configured timeout\n- Debug logging can be enabled for requests and responses\n\n## Debug Output\nWhen \"Requests\" debug is enabled, the following information is logged to the server console:\n- URL (with resolved path and query parameters)\n- HTTP Method\n- Headers (with Authorization masked for security)\n- Query Parameters (if configured)\n- Body (prettified JSON if applicable)\n- Timeout and limit values\n- Note if body was configured but not sent (for GET/HEAD requests)"
-  },
-  {
-    "id": "genesys_api",
-    "group": "Genesys",
-    "name": "Genesys [API]",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Genesys/genesys_api_170.html",
-    "author": "Total.js",
-    "icon": "ti ti-code-branch",
-    "color": "",
-    "version": "1.7.0",
-    "kind": "",
-    "readme": "# Genesys API\nhttps://developer.genesys.cloud/devapps/api-explorer\nThis component handles HTTP requests to the Genesys PureCloud API with configurable regions, methods, headers, query parameters, and body.\n\n## Dynamic Value Templates\nThe following fields support template syntax to read from global variables, input data, perform math operations, and concatenate text:\n- **Path**\n- **Query Parameters** (both keys and values)\n- **Headers** (both keys and values)\n- **Body**\n\n\n### Template Syntax:\n- **Global variables**: `{{ $FLOW_VARS.key }}` → reads from global variables (e.g., `{{ $FLOW_VARS.genesys_access_token }}`)\n- **Static value**: `SomeText` → outputs `\"SomeText\"`\n- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1`\n- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21`\n- **Array path**: `{{ $data.key3[0].key31 }}` → reads from `$.data.key3[0].key31`\n\n\n### Examples:\n- Authorization header: `bearer {{ $FLOW_VARS.genesys_access_token }}`\n- Query parameter: `pageSize={{ $data.pageSize }}`\n- Path with variable: `/api/v2/users/{{ $data.userId }}`\n\n\n### Math Operations:\n- `{{ $data.key4 + 5 }}` → addition\n- `{{ $data.key4 - 3 }}` → subtraction\n- `{{ $data.key4 * 2 }}` → multiplication\n- `{{ $data.key4 / 2 }}` → division\n\n\n### Text Concatenation:\n- `{{ $data.key1 }} test1` → `\"value1 test1\"`\n- `prefix_{{ $data.key1 }}_suffix` → `\"prefix_value1_suffix\"`\n- `bearer {{ $FLOW_VARS.token }}` → `\"bearer abc123...\"`\n\n\n### Error Handling:\nUnsupported expressions return `\"<bad expression>\"`:\n- `{{ $FLOW_VARS.nonexistent }}` → variable doesn't exist\n- `{{ $data.nonexistent }}` → path doesn't exist\n- `{{ $data.key1 + 5 }}` → cannot add number to string\n- `{{ $data.key2.invalid }}` → invalid nested path\n\n\n## Query Parameters Support\nThe component supports query parameters with template support:\n- **Query Parameters**: Key-value pairs added to the URL query string (supports templates in both keys and values)\n\nQuery parameters are automatically URL-encoded and appended to the path:\n- If path has no query string: `?key1=value1&key2=value2`\n- If path already has query string: `&key1=value1&key2=value2`\n\nTemplate expressions in query parameters:\n- Support `{{ $FLOW_VARS.* }}` syntax for global variables\n- Support `{{ $data.* }}` syntax for dynamic values\n- Both keys and values support templates\n- Values are automatically URL-encoded\n\n\n## Additional Options\n- **Timeout**: Request timeout in milliseconds (default: 10000)\n- **Max. size**: Response maximum size in bytes (default: 512000)\n\n\n## Inputs and Outputs\n- **Input**: Triggers the HTTP request (accepts any data)\n- **Output**: Returns response body in JSON format for HTTP 200 responses\n- **Error**: Returns error details for non-200 responses or request failures\n\n\n## Behavior\n- Triggered by any input request\n- Constructs full URL from region and path\n- Resolves templates in path, query parameters, headers, and body (supports `$FLOW_VARS` and `$data`)\n- Applies query parameters to the URL if specified\n- Applies timeout and size limit settings\n- Sends HTTP request with configured method, headers, and body\n- Automatically sets Content-Type to application/json for JSON bodies\n- Returns parsed JSON response on success (HTTP 200)\n- Returns error details with status, headers, and body for failures\n- Debug logging can be enabled for requests and responses\n\n## Debug Output\nWhen \"Requests\" debug is enabled, the following information is logged to the server console:\n- URL (with resolved path and query parameters)\n- HTTP Method\n- Headers (with Authorization masked for security)\n- Query Parameters (if configured)\n- Body (prettified JSON if applicable)\n- Timeout and limit values\n- Note if body was configured but not sent (for GET/HEAD requests)"
-  },
-  {
-    "id": "genesys_api",
-    "group": "Genesys",
-    "name": "Genesys [API]",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Genesys/genesys_api_180.html",
     "author": "Total.js",
     "icon": "ti ti-code-branch",
     "color": "",
@@ -444,30 +180,6 @@
     "readme": "# Jambonz Transfer (sip:refer)\n  https://docs.jambonz.org/verbs/verbs/sip-refer\n  This component adds a Jambonz `sip:refer` verb to the flow for transferring calls using SIP REFER method.\n  \n  \n  ## Configuration\n  - **Refer To** (required): The SIP URI or phone number to transfer to (supports templates)\n  - **Referred By** (optional): The SIP URI indicating who is referring the call (supports templates)\n  - **Custom SIP Headers** (optional): Key-value pairs for custom SIP headers\n  - **Event Hook** (optional): URL for event notifications during transfer (supports templates)\n  - **Action Hook** (optional): URL for completion notifications (supports templates)\n  - **Enable hook waiting management**: Configure retry logic for action hook calls\n  \n  \n  ## Dynamic Value Templates\n  All fields (Refer To, Referred By, headers, Event Hook, Action Hook, Define Actions) support template syntax.\n  \n  ### Example Input Data:\n  ```json\n  {\n    \"targetNumber\": \"+15083084809\",\n    \"callerId\": \"Customer Service\",\n    \"webhookBase\": \"https://example.com\",\n    \"transferType\": \"continue\"\n  }\n  ```\n  \n  ### Template Syntax:\n  - **Static value**: `+15083084809` → outputs `\"+15083084809\"`\n  - **Dynamic path**: `{{ $data.targetNumber }}` → reads from `$.data.targetNumber` → outputs `\"+15083084809\"`\n  - **Nested path**: `{{ $data.customer.phoneNumber }}` → reads from `$.data.customer.phoneNumber`\n  \n  ### Text Concatenation:\n  - `sip:{{ $data.targetNumber }}@example.com` → `\"sip:+15083084809@example.com\"`\n  - `{{ $data.webhookBase }}/{{ $data.transferType }}` → `\"https://example.com/continue\"`\n  - `{{ $data.webhookBase }}/event-notify` → `\"https://example.com/event-notify\"`\n  - `X-Customer-ID_{{ $data.callerId }}` → `\"X-Customer-ID_Customer Service\"`\n  \n  ### Error Handling:\n  Unsupported expressions return `\"<bad expression>\"`:\n  - `{{ $data.nonexistent }}` → `\"<bad expression>\"` (path doesn't exist)\n  - `{{ $data.callerId + 5 }}` → `\"<bad expression>\"` (cannot add number to string)\n  - `{{ $data.nested.invalid }}` → `\"<bad expression>\"` (invalid nested path)\n  \n  \n  ## Behavior\n  - If `jambonz_response` array doesn't exist in input data, creates a new array with the transfer verb\n  - If `jambonz_response` array exists, appends the transfer verb to the existing array\n  - Optional fields (referredBy, eventHook, actionHook) are only included if provided\n  - actionHookDelayAction is only added when hook waiting management is enabled and actionHook is provided\n  - Template expressions are resolved before building the transfer verb\n  - Invalid template expressions return `\"<bad expression>\"`\n  - Headers are only added if both key and value are provided"
   },
   {
-    "id": "read",
-    "group": "Objects",
-    "name": "Read",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_read.html",
-    "author": "Total.js",
-    "icon": "ti ti-filter",
-    "color": "",
-    "version": "3",
-    "kind": "action",
-    "readme": "This component reads specific values according to the configured map."
-  },
-  {
-    "id": "script",
-    "group": "Scripting",
-    "name": "Script",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_script.html",
-    "author": "Total.js",
-    "icon": "ti ti-script",
-    "color": "",
-    "version": "1",
-    "kind": "",
-    "readme": "This component executes a custom JavaScript code as it is. To send data to the default output use `send(data);`"
-  },
-  {
     "id": "scriptadvanced",
     "group": "Scripting",
     "name": "Script [Advanced]",
@@ -478,18 +190,6 @@
     "version": "1.1.5",
     "kind": "",
     "readme": "## Description\n  This component executes a custom JavaScript code with support for multiple configurable inputs.\n  Each input can have a custom name and optional path to read data from specific properties.\n\n\n  ## Features\n  - **Dynamic Inputs**: Add, rename, and configure multiple inputs\n  - **Path Support**: Extract data from specific paths for each input\n  - **Flexible Execution**: Supports both synchronous and asynchronous code\n  - **Dual Outputs**: Send successful results to Output, errors to Error / False output"
-  },
-  {
-    "id": "crontab",
-    "group": "Triggers",
-    "name": "Crontab",
-    "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Official/official_crontab.html",
-    "author": "Peter Širka / Total.js",
-    "icon": "ti ti-clock",
-    "color": "",
-    "version": "1",
-    "kind": "trigger",
-    "readme": "The component can make a trigger in the specific time and date.\n\n## Cron string: `* * * * *`\n\nMeaning of each `*` explained bellow, in order from left to right:\n\n- minute `0 - 59`\n- hour `0 - 23`\n- day of month `1 - 31`\n- month `1 - 12`\n- day of week `0 - 6` and `0` is Sunday\n\n```\n0 16 * * *      -> trigger every day at 16:00\n20 19 * * *     -> every day at 19:20 and 19:40\n* * * * *       -> trigger every minute\n0 20 * * 1      -> every monday at 20:00\n```"
   },
   {
     "id": "crontab_advanced",
