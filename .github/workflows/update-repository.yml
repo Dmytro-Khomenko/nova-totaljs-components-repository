@@ -15,6 +15,10 @@ on:
       - '.github/scripts/**/*.js'
       - '.github/workflows/*.yml'
 
+# Grant write permissions to GITHUB_TOKEN
+permissions:
+  contents: write
+
 jobs:
   update-repository:
     runs-on: ubuntu-latest
