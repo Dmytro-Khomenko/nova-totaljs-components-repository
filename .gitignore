@@ -1,0 +1,67 @@
+# Windows system files to ignore
+ehthumbs.db
+[Tt]humbs.db
+[Dd]esktop.ini
+
+# OS generated files (macOS, Linux)
+.DS_Store
+
+# Ignore temp folders
+[Tt]mp
+[Tt]emp
+[Tt]emp1
+[Tt]emp2
+
+
+# Visual Studio Code settings folder
+.vscode/
+
+# Visual Studio temporary files, build results, and user-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Environment variables files
+.env
+.env.local
+.env.*.local
+
+# Build results
+bin/
+obj/
+out/
+build/
+dist/
+
+# NuGet Packages folder
+packages/
+
+# Node.js dependencies
+node_modules/
+
+# JavaScript build outputs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# JavaScript cache files
+*.cache
+*.temp
+
+# Jest testing cache
+jest-cache/
+coverage/
+
+# Typescript build outputs
+*.tsbuildinfo
+
+# Others
+*.pidb
+*.svd
+*.pdb
+*.opendb
+
+# Ignore generated lock files if you want to (optional)
+# package-lock.json
+# yarn.lock
