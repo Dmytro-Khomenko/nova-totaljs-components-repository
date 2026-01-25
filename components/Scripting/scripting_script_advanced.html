@@ -1,0 +1,266 @@
+<script total>
+
+	exports.id = 'scriptadvanced';
+	exports.name = 'Script [Advanced]';
+	exports.group = 'Scripting';
+	exports.version = '1.1.5';
+	exports.icon = 'ti ti-script';
+	exports.author = 'Total.js';
+	exports.config = {  code: '// $ {Object} - Message object\n// $.input {String} - Input ID (internal identifier)\n// $.inputName {String} - Input name (configured friendly name)\n// data {Object} - Input data\n// send(data, output?) {Function} - Send data to output\n//   - send(data) or send(data, \'output\') - sends to main Output\n//   - send(data, \'error\') - sends to Error / False output\n\n// Example: Send success to Output\n// send({ result: "success", data: data });\n\n// Example: Send error to Error output\n// send({ error: true, message: "Something went wrong" }, \'error\');\n\n', 
+                      inputs: [{ id: 'input', name: 'Input' }] 
+                    };
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [
+                      { id: 'output', name: 'Output' }, 
+                      { id: 'error', name: 'Error / False' }
+                    ];
+	exports.meta = { settingswidth: 1000 };
+
+	exports.make = function(instance, config) {
+
+		var AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+		var fn;
+		var compiled = {};
+
+		instance.message = function($) {
+			if (fn) {
+				try {
+					var send = function(data, output) {
+						if (output === 'error') {
+							$.send('error', data);
+						} else {
+							$.send('output', data);
+						}
+					};
+					var data = $.data;
+					var inputName = $.input;
+
+					// Get input configuration
+					if (compiled[$.input]) {
+						// Get the input name
+						inputName = compiled[$.input].name;
+
+						// Get data from specific path if configured
+						if (compiled[$.input].path) {
+							data = U.get($.data, compiled[$.input].path);
+						}
+					}
+
+					// Add inputName to $ object for easy access
+					$.inputName = inputName;
+
+					fn($, data, F.require, send);
+				} catch (e) {
+					$.throw(e);
+					$.destroy();
+				}
+			}
+		};
+
+		instance.configure = function() {
+
+			// Reset before compiling
+			instance.status(0);
+
+			// Configure inputs
+			var inputs = [];
+			compiled = {};
+
+			for (var item of config.inputs) {
+				if (item) {
+					compiled[item.id] = item;
+					inputs.push({ id: item.id, name: item.name });
+				}
+			}
+
+			var prev = JSON.stringify(instance.inputs);
+			var curr = JSON.stringify(inputs);
+
+			if (prev !== curr) {
+				instance.inputs = inputs;
+				instance.save();
+			}
+
+			// Configure code
+			try {
+				if (config.code) {
+					instance.status(1);
+					fn = config.code.includes('await ') ? (new AsyncFunction('$', 'data', 'require', 'send', 'var next=send;\n' + config.code)) : (new Function('$', 'data', 'require', 'send', 'var next=send;\n' + config.code));
+				} else {
+					instance.status(0);
+					fn = null;
+				}
+			} catch (e) {
+				fn = null;
+				instance.throw('Script [Advanced]: ' + e.message);
+			}
+		};
+
+		instance.close = function() {
+			fn = null;
+			compiled = null;
+		};
+
+		instance.configure();
+
+	};
+
+</script>
+
+
+
+<settings>
+	<div class="CLASS-settings">
+		<!-- Top section: Configure Inputs (auto height, scrollable if needed) -->
+		<div class="CLASS-settings-inputs">
+			<div class="padding bg-smoke">
+				<div class="caption m">
+					<div class="toolbar">
+						<nav>
+							<button class="exec" data-exec="tmpscriptadv.add"><i class="ti ti-plus-circle"></i>Add input</button>
+						</nav>
+					</div>
+					<label>Configure Inputs</label>
+				</div>
+				<ui-component name="listform" path="?.inputs" config="autofocus:1;empty:No inputs defined. Add an input to get started.">
+
+					<script type="text/html">
+						<div class="item"><i class="ti ti-arrow-right"></i><b>{{ name }}</b>{{ if path }}<span class="fs11 gray ml5">{{ path }}</span>{{ fi }}</div>
+					</script>
+
+					<script type="text/html">
+						<div class="padding">
+							<ui-component name="input" path="?.name" config="required:1;innerlabel:1;placeholder:Enter input name" default="''" class="m">Input name</ui-component>
+							<ui-component name="input" path="?.path" config="innerlabel:1;placeholder:path.to.property;monospace:1" default="''">Path to data</ui-component>
+							<div class="help">Optional. Extract data from a specific property path (e.g., <code>user.profile.name</code>)</div>
+							<ui-component name="validate" path="?" class="toolbar">
+								<button name="submit"><i class="ti ti-file-code"></i>Save</button>
+								<button name="remove">Remove</button>
+								<button name="cancel">Cancel</button>
+							</ui-component>
+						</div>
+					</script>
+				</ui-component>
+			</div>
+			<hr class="nmt nmb" />
+		</div>
+
+		<!-- Bottom section: Code Snippet (fixed height, own scroll) -->
+		<div class="CLASS-settings-code">
+			<div class="padding">
+				<div class="caption m">
+					<label>Code Snippet</label>
+				</div>
+			</div>
+			<ui-component name="code" path="?.code" config="type:javascript;minheight:400"></ui-component>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS-settings .item { padding: 8px 10px; font-size: 12px; }
+	.CLASS-settings .item i { margin-right: 5px; }
+	.CLASS footer { padding: 10px; font-size: 12px; }
+
+	/* Force hide TotalJS UI scrollbar from parent dialog */
+	.ui-scrollbar > .ui-scrollbar-path {
+		display: none !important;
+	}
+
+	/* Main container: use flexbox to divide into two sections */
+	.CLASS-settings {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		overflow: hidden;
+	}
+
+	/* Top section: Configure Inputs - auto height with max limit */
+	.CLASS-settings-inputs {
+		flex: 0 0 auto;
+		max-height: 40vh;
+		overflow-y: auto;
+		overflow-x: hidden;
+	}
+
+	/* Make listform expand naturally within its section */
+	.CLASS-settings-inputs ui-component[name="listform"] .ui-listform {
+		max-height: none !important;
+		overflow: visible !important;
+	}
+
+	/* Bottom section: Code Snippet - takes remaining space */
+	.CLASS-settings-code {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		min-height: 400px;
+	}
+
+	/* Code editor fills its container */
+	.CLASS-settings-code ui-component[name="code"] {
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+</style>
+
+<script>
+	TOUCH(function(exports, reinit) {
+
+		exports.settings = function(meta) {
+
+			var tmp = W.tmpscriptadv;
+
+			if (!tmp) {
+
+				tmp = {};
+				tmp.add = function(el) {
+					var obj = {};
+					obj.id = 'i' + Math.random().toString(36).substring(6);
+					obj.name = 'Input';
+					obj.path = '';
+
+					var scope = el.scope();
+					scope.push('inputs', obj);
+					scope.change('*');
+				};
+
+				W.tmpscriptadv = tmp;
+			}
+		};
+
+		exports.configure = function() {
+			var changes = exports.instance.changes;
+			if (changes && changes.newbie) {
+				var inputs = [];
+				for (var item of exports.config.inputs)
+					inputs.push({ id: item.id, name: item.name });
+				exports.instance.inputs = inputs;
+				UPD('flow.data');
+			}
+		};
+
+	});
+</script>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+  ## Description
+  This component executes a custom JavaScript code with support for multiple configurable inputs.
+  Each input can have a custom name and optional path to read data from specific properties.
+
+
+  ## Features
+  - **Dynamic Inputs**: Add, rename, and configure multiple inputs
+  - **Path Support**: Extract data from specific paths for each input
+  - **Flexible Execution**: Supports both synchronous and asynchronous code
+  - **Dual Outputs**: Send successful results to Output, errors to Error / False output
+</readme>

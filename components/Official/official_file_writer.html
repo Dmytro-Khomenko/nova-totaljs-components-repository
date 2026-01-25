@@ -1,0 +1,113 @@
+<script total>
+
+	exports.id = 'filewriter';
+	exports.name = 'File Writer';
+	exports.group = 'Files';
+	exports.version = '1';
+	exports.icon = 'ti ti-pencil';
+	exports.author = 'Total.js';
+	exports.config = { path: '', serializer: 'json', rewrite: true, divider: '\\n' };
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+
+	exports.make = function(instance, config) {
+
+		var path;
+		var divider;
+		var timeout;
+
+		var replacewhitechar = function(text) {
+			switch (text[1]) {
+				case 'n':
+					return '\n';
+				case 'r':
+					return '\r';
+				case 't':
+					return '\t';
+			}
+			return text;
+		};
+
+		instance.message = function($) {
+
+			if (!config.path)
+				return;
+
+			var data = $.data;
+
+			switch (config.serializer) {
+				case 'json':
+					data = JSON.stringify($.data);
+					break;
+				case 'text':
+					data = data + '';
+					break;
+			}
+
+			if (!(data instanceof Buffer)) {
+				if (typeof(data) !== 'string')
+					data = data + '';
+				data = Buffer.from(data, 'utf8');
+			}
+
+			NOW = new Date();
+			instance.status({ used: NOW, size: data.length });
+
+			if (config.rewrite) {
+				F.Fs.writeFile(path, data, NOOP);
+			} else {
+				if (divider)
+					data = Buffer.concat([data, divider]);
+				F.Fs.appendFile(path, data, NOOP);
+			}
+
+			$.destroy();
+		};
+
+		instance.configure = function() {
+			path = config.path[0] === '~' ? PATH.root(config.path.substring(1)) : config.path;
+			divider = config.divider ? Buffer.from(config.divider.replace(/\\[a-z]/g, replacewhitechar), 'utf8') : null;
+		};
+
+		instance.configure();
+
+	};
+
+</script>
+
+<settings>
+	<div class="padding">
+		<ui-component name="input" path="?.path" config="required:1;placeholder:/www/flowstream/data.json"><b>Path</b></ui-component>
+		<div class="help m">Absolute path to the file. The path starts with the <code>~</code> char will use a filename in the project's root directory.</div>
+		<ui-component name="input" path="?.serializer" config="dirsource:json|JSON,text|Text,buffer|Buffer;required:1" default="'json'" class="m">Serializer</ui-component>
+		<ui-component name="input" path="?.rewrite" config="type:checkbox" default="true">Rewrite content</ui-component>
+		<ui-bind path="?.rewrite" config="hide" class="hidden">
+			<hr />
+			<div class="row">
+				<div class="col-md-4 m">
+					<ui-component name="input" path="?.divider">Divider</ui-component>
+				</div>
+			</div>
+		</ui-bind>
+	</div>
+</settings>
+
+<readme>
+The component writes incoming data into the file.
+</readme>
+
+<style>
+	.CLASS footer { padding: 10px; font-size: 12px; }
+	.CLASS hr { margin: 5px 0; }
+</style>
+
+<body>
+	<header>
+		<i class="ICON"></i>NAME
+	</header>
+	<footer>
+		<div><i class="ti ti-calendar mr5"></i><ui-bind path="STATUS.used" config="text;format:yyyy-MM-dd HH:mm:ss;empty"></span></ui-bind></div>
+		<div><i class="ti ti-calculator mr5"></i><ui-bind path="STATUS.size" config="text;helper:filesize;empty"></span></ui-bind></div>
+		<hr />
+		<ui-bind path="CONFIG.path" config="text;empty"></ui-bind>
+	</footer>
+</body>

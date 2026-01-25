@@ -1,0 +1,153 @@
+<script total>
+exports.id = 'milvussearch';
+exports.name = 'Milvus Vector Search';
+exports.icon = 'ti ti-vector-triangle';
+exports.author = 'Auto-generated';
+exports.version = '1.0.0';
+exports.group = 'AI / VectorDB';
+exports.color = '#4A89DC';
+exports.config = {
+	instance: '', // e.g. http://n8n-milvus:19530
+	collection: '',
+	vectorfield: '',
+	metrictype: 'COSINE',
+	resultlimit: 1,
+	outputfilter: '',
+	token: ''
+};
+exports.inputs = [{ id: 'input', name: 'Embedding' }];
+exports.outputs = [{ id: 'output', name: 'Results' }, { id: 'error', name: 'Error' }];
+
+// Helper to parse output filter list into an array of strings
+function parseOutputFields(outputfilter) {
+	if (!outputfilter)
+		return [];
+	return outputfilter
+		.split(',')
+		.map(function(s) { return s.trim(); })
+		.filter(Boolean);
+}
+
+// Build request body to Milvus-like gateway
+function buildRequestBody(options, embedding) {
+	return {
+		collectionName: options.collection,
+		data: [ Array.isArray(embedding) ? embedding : [embedding] ],
+		annsField: options.vectorfield,
+		metricType: options.metrictype,
+		limit: +options.resultlimit || 2,
+		outputFields: parseOutputFields(options.outputfilter)
+	};
+}
+
+exports.make = function(instance, config) {
+
+	function postSearch(embedding, next) {
+		var base = (config.instance || '').trim().replace(/^@+/, '');
+		if (base && !/^https?:\/\//i.test(base))
+			base = 'http://' + base;
+		if (!base)
+			return next(new Error('Instance is not configured'));
+
+		var url = base.replace(/\/$/, '') + '/v2/vectordb/entities/search';
+		var body = buildRequestBody(config, embedding);
+
+		var req = RESTBuilder.POST(url)
+			.header('Content-Type', 'application/json')
+			.json(body)
+			.timeout(15000);
+
+		if (config.token) {
+			var tok = config.token.trim();
+			if (!/^Bearer\s+/i.test(tok))
+				tok = 'Bearer ' + tok;
+			req.header('Authorization', tok);
+		}
+
+		req.exec(function(err, response, output) {
+			next(err, response, output);
+		});
+	}
+
+	instance.configure = function() {
+		// keep inputs persisted in editor UI
+		instance.inputs = [{ id: 'input', name: 'Embedding' }];
+		instance.save();
+	};
+
+	instance.message = function($) {
+		var embedding = $.data;
+		postSearch(embedding, function(err, response, output) {
+			if (err || (output && output.status && output.status !== 200)) {
+				var status = output && output.status ? output.status : 0;
+				var payload = { error: err ? (err.message || String(err)) : 'HTTP ' + status, status: status, response: response };
+				var emsg = instance.newmessage(payload);
+				emsg.send('error');
+				instance.error(payload.error);
+				$.destroy();
+				return;
+			}
+			var msg = instance.newmessage(response);
+			msg.send('output');
+			$.destroy();
+		});
+	};
+
+	instance.configure();
+};
+
+// No custom endpoints needed (manual collection entry)
+</script>
+
+<readme>
+This component performs a similarity search against a Milvus-compatible vector store.
+
+Inputs
+- An embedding array (e.g. [0.12, -0.98, ...]).
+
+Outputs
+- The raw JSON response from the vector store, e.g.:
+{
+  "code": 0,
+  "cost": 0,
+  "data": [
+    { "distance": 0.9, "id": 123, "language": "ua", "location": "Kyivska", "text": "Київська" },
+    { "distance": 0.80, "id": 456, "language": "ua", "location": "Lvivska", "text": "Львівська" }
+  ],
+  "topks": [ 2 ]
+}
+
+The settings allow configuring the instance, collection, vector field, metric type, result limit, and output fields to return.
+</readme>
+
+<settings>
+    <div class="CLASS-settings">
+        <div class="padding">
+            <ui-component name="input" path="?.instance" config="required:1;innerlabel:1;placeholder:http://n8n-milvus:19530" class="m">Instance</ui-component>
+            <ui-component name="input" path="?.token" config="innerlabel:1;placeholder:Optional access token" class="m">Token</ui-component>
+            <ui-component name="input" path="?.collection" config="required:1;innerlabel:1;placeholder:your_collection_name" class="m">Collection</ui-component>
+            <ui-component name="input" path="?.vectorfield" config="required:1;innerlabel:1;placeholder:vector" class="m">Vector Field</ui-component>
+			<ui-component name="dropdown" path="?.metrictype" config="items:L2|L2,IP|IP,COSINE|COSINE,HAMMING|HAMMING,JACCARD|JACCARD,TANIMOTO|TANIMOTO,SUBSTRUCTURE|SUBSTRUCTURE,SUPERSTRUCTURE|SUPERSTRUCTURE;search:0" class="m">Metric Type</ui-component>
+            <ui-component name="input" path="?.resultlimit" config="type:number;required:1;min:1;step:1;innerlabel:1;default:1" class="m">Result limit</ui-component>
+            <ui-component name="input" path="?.outputfilter" config="innerlabel:1;placeholder:text,location,language" class="m">Output filter</ui-component>
+            <div class="help">Comma-separated fields to be returned</div>
+        </div>
+    </div>
+</settings>
+
+<style>
+	.CLASS-settings .m { margin-bottom: 12px; }
+	.CLASS header div { border-radius: var(--radius); padding: 3px; background-color: #4A89DC; color: #fff; }
+	.CLASS header div i { background-color: rgba(0,0,0,0.15); }
+	.ui-dark .CLASS header div i { background-color: rgba(255,255,255,0.2); }
+	.CLASS footer { height: 40px; line-height: 40px; padding: 0 10px; font-size: 12px; }
+</style>
+
+<body>
+	<header>
+		<i class="ICON"></i>NAME
+	</header>
+	<footer>
+		Collection: <ui-bind path="CONFIG" config="text:value?value.collection:''" class="b"></ui-bind>
+	</footer>
+</body>

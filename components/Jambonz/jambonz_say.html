@@ -1,0 +1,336 @@
+<script total>
+
+    exports.id = 'jambonz_say';
+    exports.name = 'Jambonz [say]';
+    exports.group = 'Jambonz';
+    exports.icon = 'ti ti-atom';
+    exports.author = 'Demon';
+    exports.version = '1.3.1';
+    exports.config = {
+        forwardInputData: false,
+        prompt: '',
+        vendor: '',
+        language: '',
+        voice: '',
+        loop: 1
+    };
+    exports.inputs = [{ id: 'input', name: 'Input' }];
+    exports.outputs = [{ id: 'output', name: 'Output' }];
+
+    exports.make = function(instance, config) {
+
+        function buildOutput(data, config, sayVerb) {
+            if (config.forwardInputData) {
+                var output = {};
+
+                // Extract or determine forwarded_data
+                if (data.forwarded_data !== undefined) {
+                    // Input already has forwarded_data, use it as is
+                    output.forwarded_data = data.forwarded_data;
+                } else {
+                    // No forwarded_data in input, create it from input data
+                    // Exclude jambonz_response if it exists
+                    var forwardData = {};
+                    for (var key in data) {
+                        if (key !== 'jambonz_response' && data.hasOwnProperty(key)) {
+                            forwardData[key] = data[key];
+                        }
+                    }
+                    output.forwarded_data = forwardData;
+                }
+
+                // Handle jambonz_response - always combine into array
+                var responses = [];
+
+                if (data.jambonz_response !== undefined) {
+                    if (Array.isArray(data.jambonz_response)) {
+                        // Already an array, clone and add all items
+                        responses = data.jambonz_response.slice();
+                    } else {
+                        // Single response, add it
+                        responses.push(data.jambonz_response);
+                    }
+                }
+
+                // Add current verb
+                responses.push(sayVerb);
+                output.jambonz_response = responses;
+
+                return output;
+            }
+
+            // Forward disabled - strip forwarded_data, only pass jambonz_response
+            if (!('jambonz_response' in data)) {
+                return {
+                    jambonz_response: [sayVerb]
+                };
+            }
+            else if (Array.isArray(data.jambonz_response)) {
+                data.jambonz_response.push(sayVerb);
+                return {
+                    jambonz_response: data.jambonz_response
+                };
+            }
+            else {
+                return {
+                    jambonz_response: [sayVerb]
+                };
+            }
+        }
+
+        var resolvePathOrValue = function(expr, data) {
+            expr = expr.trim();
+            if (expr.startsWith('$data.')) {
+                var path = expr.substring(6);
+                var value = U.get(data, path);
+                return value !== undefined ? value : null;
+            }
+            // Try to parse as number
+            var num = parseFloat(expr);
+            if (!isNaN(num) && expr === num.toString()) {
+                return num;
+            }
+            return expr;
+        };
+
+        var resolveValue = function(valueStr, data) {
+            if (typeof valueStr !== 'string') {
+                return valueStr;
+            }
+
+            // Replace all template patterns {{ $data.* }} or {{ expression }}
+            var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+                expression = expression.trim();
+
+                // Check if it contains math operators (+, -, *, /)
+                var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+                if (mathMatch) {
+                    // It's a math expression
+                    var left = resolvePathOrValue(mathMatch[1], data);
+                    var operator = mathMatch[2];
+                    var right = resolvePathOrValue(mathMatch[3], data);
+
+                    // Check if path resolution failed
+                    if (left === null || right === null) {
+                        return '<bad expression>';
+                    }
+
+                    var leftNum = parseFloat(left);
+                    var rightNum = parseFloat(right);
+
+                    if (!isNaN(leftNum) && !isNaN(rightNum)) {
+                        switch (operator) {
+                            case '+': return leftNum + rightNum;
+                            case '-': return leftNum - rightNum;
+                            case '*': return leftNum * rightNum;
+                            case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+                        }
+                    }
+                    // Math operation failed (non-numeric values)
+                    return '<bad expression>';
+                } else {
+                    // It's a simple path
+                    var resolved = resolvePathOrValue(expression, data);
+                    if (resolved === null) {
+                        return '<bad expression>';
+                    }
+                    return resolved !== expression ? resolved : '<bad expression>';
+                }
+            });
+
+            return result;
+        };
+
+        instance.message = function($) {
+
+            let data = $?.data || {};
+
+            // Safeguard: if data is not an object (string, number, etc), treat as no jambonz_response
+            if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+                data = {};
+            }
+
+            // Resolve prompt value from template
+            var promptText = resolveValue(config.prompt || '', data);
+
+            var sayVerb = {
+                verb: 'say',
+                text: promptText,
+                loop: config.loop || 1,
+                synthesizer: {}
+            };
+
+            // Add vendor only if provided
+            if (config.vendor) {
+                sayVerb.synthesizer.vendor = config.vendor.toLowerCase();
+            }
+
+            // Add language only if provided
+            if (config.language) {
+                sayVerb.synthesizer.language = config.language;
+            }
+
+            // Add voice only if provided
+            if (config.voice) {
+                sayVerb.synthesizer.voice = config.voice;
+            }
+
+            // If synthesizer is empty, remove it
+            if (Object.keys(sayVerb.synthesizer).length === 0) {
+                delete sayVerb.synthesizer;
+            }
+
+            $.data = buildOutput(data, config, sayVerb);
+            $.send('output');
+            $.destroy();
+        };
+
+    };
+
+    </script>
+
+    <settings>
+
+        <script>
+            // Dropdown options - MODIFY ONLY THESE ARRAYS TO CHANGE OPTIONS
+            var vendors = ['AssemblyAI', 'AWS', 'Cartesia', 'Cobalt', 'Custom', 'Deepgram', 'ElevenLabs', 'Google', 'IBM', 'Microsoft', 'Nuance', 'Nvidia', 'OpenAI', 'PlayHT', 'RimeLabs', 'Soniox', 'Speechmatics', 'Verbio', 'Voxist', 'WellSaid', 'Whisper'];
+            var languages = ['uk-UA', 'ru-RU', 'en-US'];
+        </script>
+
+        <div class="padding">
+            <div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+                <div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+                    <ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-12 m">
+                    <ui-component name="input" path="?.prompt" config="required:true;placeholder:Enter text to speak;type:multiline;rows:5">Prompt</ui-component>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6 m">
+                    <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                    <ui-component name="input" path="?.vendor" config="placeholder:Select vendor;dirsource:vendors;dirempty:None">Vendor (optional)</ui-component>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6 m">
+                    <ui-component name="input" path="?.language" config="placeholder:Select language;dirsource:languages;dirempty:None">Language (optional)</ui-component>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6 m">
+                    <ui-component name="input" path="?.voice" config="placeholder:e.g. uk-UA-Chirp3-HD-Achernar">Voice (optional)</ui-component>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6 m">
+                    <ui-component name="input" path="?.loop" config="type:number;min:1;increment:1">Loop</ui-component>
+                    <div class="help">Number of times to play prompt (default: 1)</div>
+                </div>
+            </div>
+        </div>
+    </settings>
+
+    <style>
+    .CLASS { border-color: #c85a5a !important; }
+    .CLASS header { background-color: #c85a5a; color: white; }
+    .CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+    /* Fix directory dropdown positioning */
+    #flow_settings .ui-directory {
+        position: fixed !important;
+    }
+
+    /* Input field styling for Prompt, Voice and Loop */
+    #flow_settings textarea[name="prompt"],
+    #flow_settings input[name="voice"],
+    #flow_settings input[name="loop"] {
+        font-family: Consolas, monospace !important;
+        color: darkblue !important;
+    }
+
+    .ui-dark #flow_settings textarea[name="prompt"],
+    .ui-dark #flow_settings input[name="voice"],
+    .ui-dark #flow_settings input[name="loop"] {
+        color: #6fa8dc !important;
+    }
+
+    #flow_settings .forward-banner .m {
+        margin-bottom: 0 !important;
+    }
+    </style>
+
+    <body>
+    <header>
+        <i class="$ICON"></i>$NAME
+    </header>
+    </body>
+
+    <readme>
+# Jambonz Say
+https://docs.jambonz.org/verbs/verbs/say
+This component adds a Jambonz `say` verb to the flow for text-to-speech synthesis.
+
+
+## Configuration
+- **Prompt** (required): Text to speak (supports static text and dynamic templates)
+- **Vendor** (optional): TTS vendor to use
+- **Language** (optional): Language code for TTS
+- **Voice** (optional): Specific voice to use
+- **Loop**: Number of times to repeat (default: 1)
+
+
+## Dynamic Value Templates
+The Prompt field supports template syntax to read from input data, perform math operations, and concatenate text.
+
+### Example Input Data:
+```json
+{
+  "userName": "John",
+  "accountBalance": 1500,
+  "transactionAmount": 250
+}
+```
+
+### Template Syntax:
+- **Static text**: `Welcome to our service` → outputs `"Welcome to our service"`
+- **Dynamic path**: `Hello {{ $data.userName }}` → outputs `"Hello John"`
+- **Text concatenation**: `Your balance is {{ $data.accountBalance }} dollars` → `"Your balance is 1500 dollars"`
+
+### Math Operations:
+- `Your new balance is {{ $data.accountBalance - $data.transactionAmount }}` → `"Your new balance is 1250"`
+- `Transaction doubled: {{ $data.transactionAmount * 2 }}` → `"Transaction doubled: 500"`
+
+### Complex Examples:
+- `Hello {{ $data.userName }}, your account ending in {{ $data.accountNumber }}` → Combines multiple template values
+- `Balance after transaction: {{ $data.accountBalance - $data.transactionAmount }} dollars` → Math with text
+
+### Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $data.nonexistent }}` → path doesn't exist
+- `{{ $data.userName + 5 }}` → cannot add number to string
+- `{{ $data.account.invalid }}` → invalid nested path
+
+
+## Behavior
+- If `jambonz_response` array doesn't exist in input data, creates a new array with the say verb
+- If `jambonz_response` array exists, appends the say verb to the existing array
+- Vendor, Language, and Voice are optional - only included if specified
+- Vendor names are automatically converted to lowercase
+- Template expressions are resolved before building the say verb
+- Invalid template expressions return `"<bad expression>"`
+
+
+## Customization dropdown lists
+To modify dropdown options, edit related arrays in the `<settings><script>` section:
+
+```javascript
+var vendors = ['Google', 'AWS', 'Microsoft'];
+var languages = ['en-US', 'uk-UA', 'ru-RU'];
+```
+The dropdown options will automatically update based on these arrays.
+
+</readme>

@@ -1,0 +1,300 @@
+<script total>
+
+	exports.id = 'jambonz_hangup';
+	exports.name = 'Jambonz [hangup]';
+	exports.group = 'Jambonz';
+	exports.icon = 'ti ti-atom';
+	exports.author = 'Demon';
+	exports.version = '1.2.2';
+	exports.config = {
+		forwardInputData: false,
+		headers: {}
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }];
+
+	exports.make = function(instance, config) {
+
+		function buildOutput(data, config, hangupVerb) {
+			if (config.forwardInputData) {
+				var output = {};
+
+				// Extract or determine forwarded_data
+				if (data.forwarded_data !== undefined) {
+					// Input already has forwarded_data, use it as is
+					output.forwarded_data = data.forwarded_data;
+				} else {
+					// No forwarded_data in input, create it from input data
+					// Exclude jambonz_response if it exists
+					var forwardData = {};
+					for (var key in data) {
+						if (key !== 'jambonz_response' && data.hasOwnProperty(key)) {
+							forwardData[key] = data[key];
+						}
+					}
+					output.forwarded_data = forwardData;
+				}
+
+				// Handle jambonz_response - always combine into array
+				var responses = [];
+
+				if (data.jambonz_response !== undefined) {
+					if (Array.isArray(data.jambonz_response)) {
+						// Already an array, clone and add all items
+						responses = data.jambonz_response.slice();
+					} else {
+						// Single response, add it
+						responses.push(data.jambonz_response);
+					}
+				}
+
+				// Add current verb
+				responses.push(hangupVerb);
+				output.jambonz_response = responses;
+
+				return output;
+			}
+
+			// Forward disabled - strip forwarded_data, only pass jambonz_response
+			if (!('jambonz_response' in data)) {
+				return {
+					jambonz_response: [hangupVerb]
+				};
+			}
+			else if (Array.isArray(data.jambonz_response)) {
+				data.jambonz_response.push(hangupVerb);
+				return {
+					jambonz_response: data.jambonz_response
+				};
+			}
+			else {
+				return {
+					jambonz_response: [hangupVerb]
+				};
+			}
+		}
+
+		var resolvePathOrValue = function(expr, data) {
+			expr = expr.trim();
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+			// Try to parse as number
+			var num = parseFloat(expr);
+			if (!isNaN(num) && expr === num.toString()) {
+				return num;
+			}
+			return expr;
+		};
+
+		var resolveValue = function(valueStr, data) {
+			if (typeof valueStr !== 'string') {
+				return valueStr;
+			}
+
+			// Replace all template patterns {{ $data.* }} or {{ expression }}
+			var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				// Check if it contains math operators (+, -, *, /)
+				var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+				if (mathMatch) {
+					// It's a math expression
+					var left = resolvePathOrValue(mathMatch[1], data);
+					var operator = mathMatch[2];
+					var right = resolvePathOrValue(mathMatch[3], data);
+
+					// Check if path resolution failed
+					if (left === null || right === null) {
+						return '<bad expression>';
+					}
+
+					var leftNum = parseFloat(left);
+					var rightNum = parseFloat(right);
+
+					if (!isNaN(leftNum) && !isNaN(rightNum)) {
+						switch (operator) {
+							case '+': return leftNum + rightNum;
+							case '-': return leftNum - rightNum;
+							case '*': return leftNum * rightNum;
+							case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+						}
+					}
+					// Math operation failed (non-numeric values)
+					return '<bad expression>';
+				} else {
+					// It's a simple path
+					var resolved = resolvePathOrValue(expression, data);
+					if (resolved === null) {
+						return '<bad expression>';
+					}
+					return resolved !== expression ? resolved : '<bad expression>';
+				}
+			});
+
+			return result;
+		};
+
+		instance.message = function($) {
+
+			let data = $?.data || {};
+
+			// Safeguard: if data is not an object (string, number, etc), treat as no jambonz_response
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			var hangupVerb = {
+				verb: 'hangup'
+			};
+
+			// Add headers if any exist (preserve insertion order)
+			if (config.headers && typeof config.headers === 'object' && Object.keys(config.headers).length > 0) {
+				var headers = {};
+				var hasHeaders = false;
+				for (var key in config.headers) {
+					if (config.headers.hasOwnProperty(key) && config.headers[key]) {
+						// Resolve both key and value from templates
+						var resolvedKey = resolveValue(key, data);
+						var resolvedValue = resolveValue(config.headers[key], data);
+						headers[resolvedKey] = resolvedValue;
+						hasHeaders = true;
+					}
+				}
+				if (hasHeaders) {
+					hangupVerb.headers = headers;
+				}
+			}
+
+			// Use buildOutput to properly handle forwarding
+			$.data = buildOutput(data, config, hangupVerb);
+			$.send('output');
+			$.destroy();
+		};
+
+	};
+
+</script>
+
+<settings>
+	<div class="padding">
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Custom SIP Headers</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="keyvalue" path="?.headers" config="placeholderkey:Header name;placeholdervalue:Header value and press enter"></ui-component>
+			</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #c85a5a !important; }
+	.CLASS header { background-color: #c85a5a; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Input field styling for text inputs in keyvalue component */
+	#flow_settings .ui-keyvalue input[type="text"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings .ui-keyvalue input[type="text"] {
+		color: #6fa8dc !important;
+	}
+
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+
+<readme>
+# Jambonz Hangup
+https://docs.jambonz.org/verbs/verbs/hangup
+This component adds a Jambonz `hangup` verb to the flow data.
+
+
+## Configuration
+- **Custom SIP Headers** (optional): Key-value pairs for custom SIP headers to include in the hangup message
+
+
+## Dynamic Value Templates
+Both header keys and values support template syntax to read from input data, perform math operations, and concatenate text.
+
+### Example Input Data:
+```json
+{
+  "sessionId": "abc123",
+  "duration": 120,
+  "reason": "completed",
+  "account": {
+    "id": "12345"
+  }
+}
+```
+
+### Template Syntax:
+- **Static value**: `X-Custom-Header` → outputs `"X-Custom-Header"`
+- **Dynamic path**: `{{ $data.sessionId }}` → reads from `$.data.sessionId` → outputs `"abc123"`
+- **Nested path**: `{{ $data.account.id }}` → reads from `$.data.account.id` → outputs `"12345"`
+
+### Text Concatenation:
+- `X-Session-{{ $data.sessionId }}` → `"X-Session-abc123"`
+- `{{ $data.reason }}-call` → `"completed-call"`
+- `session_{{ $data.sessionId }}_{{ $data.account.id }}` → `"session_abc123_12345"`
+
+### Math Operations:
+- `{{ $data.duration + 10 }}` → `130`
+- `{{ $data.duration - 20 }}` → `100`
+- `{{ $data.duration * 2 }}` → `240`
+- `{{ $data.duration / 2 }}` → `60`
+
+### Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $data.nonexistent }}` → `"<bad expression>"` (path doesn't exist)
+- `{{ $data.sessionId + 5 }}` → `"<bad expression>"` (cannot add number to string)
+- `{{ $data.account.invalid }}` → `"<bad expression>"` (invalid nested path)
+
+
+## Behavior
+- If `jambonz_response` array doesn't exist in input data, creates a new array with the hangup verb
+- If `jambonz_response` array exists, appends the hangup verb to the existing array
+- Headers are only added if both key and value are provided
+- Template expressions are resolved for both header keys and values before building the hangup verb
+- Invalid template expressions return `"<bad expression>"`
+
+</readme>

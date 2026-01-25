@@ -1,0 +1,501 @@
+<script total>
+
+	exports.id = 'jambonz_tag';
+	exports.name = 'Jambonz [tag]';
+	exports.group = 'Jambonz';
+	exports.icon = 'ti ti-atom';
+	exports.author = 'Demon';
+	exports.version = '1.3.1';
+	exports.config = {
+		forwardInputData: false,
+		rows: []
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }];
+
+	exports.make = function(instance, config) {
+
+		function buildOutput(data, config, tagVerb) {
+			if (config.forwardInputData) {
+				var output = {};
+
+				// Extract or determine forwarded_data
+				if (data.forwarded_data !== undefined) {
+					// Input already has forwarded_data, use it as is
+					output.forwarded_data = data.forwarded_data;
+				} else {
+					// No forwarded_data in input, create it from input data
+					// Exclude jambonz_response if it exists
+					var forwardData = {};
+					for (var key in data) {
+						if (key !== 'jambonz_response' && data.hasOwnProperty(key)) {
+							forwardData[key] = data[key];
+						}
+					}
+					output.forwarded_data = forwardData;
+				}
+
+				// Handle jambonz_response - always combine into array
+				var responses = [];
+
+				if (data.jambonz_response !== undefined) {
+					if (Array.isArray(data.jambonz_response)) {
+						// Already an array, clone and add all items
+						responses = data.jambonz_response.slice();
+					} else {
+						// Single response, add it
+						responses.push(data.jambonz_response);
+					}
+				}
+
+				// Add current verb
+				responses.push(tagVerb);
+				output.jambonz_response = responses;
+
+				return output;
+			}
+
+			// Forward disabled - use standard behavior
+			if (!('jambonz_response' in data)) {
+				return {
+					jambonz_response: [tagVerb]
+				};
+			}
+			else if (Array.isArray(data.jambonz_response)) {
+				data.jambonz_response.push(tagVerb);
+				return data;
+			}
+			else {
+				return {
+					jambonz_response: [tagVerb]
+				};
+			}
+		}
+
+		var convertValue = function(value, type) {
+			if (!type) {
+				type = 'string';
+			}
+
+			switch (type) {
+				case 'string':
+					return value != null ? String(value) : '';
+				case 'number':
+					var num = parseFloat(value);
+					return isNaN(num) ? 0 : num;
+				case 'boolean':
+					if (typeof value === 'boolean') return value;
+					if (typeof value === 'string') {
+						var lower = value.toLowerCase().trim();
+						return lower === 'true' || lower === '1' || lower === 'yes';
+					}
+					return Boolean(value);
+				default:
+					return String(value);
+			}
+		};
+
+		var resolvePathOrValue = function(expr, data) {
+			expr = expr.trim();
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+			// Try to parse as number
+			var num = parseFloat(expr);
+			if (!isNaN(num) && expr === num.toString()) {
+				return num;
+			}
+			return expr;
+		};
+
+		var resolveValue = function(valueStr, data) {
+			if (typeof valueStr !== 'string') {
+				return valueStr;
+			}
+
+			// Replace all template patterns {{ $data.* }} or {{ expression }}
+			var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				// Check if it contains math operators (+, -, *, /)
+				var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+				if (mathMatch) {
+					// It's a math expression
+					var left = resolvePathOrValue(mathMatch[1], data);
+					var operator = mathMatch[2];
+					var right = resolvePathOrValue(mathMatch[3], data);
+
+					// Check if path resolution failed
+					if (left === null || right === null) {
+						return '<bad expression>';
+					}
+
+					var leftNum = parseFloat(left);
+					var rightNum = parseFloat(right);
+
+					if (!isNaN(leftNum) && !isNaN(rightNum)) {
+						switch (operator) {
+							case '+': return leftNum + rightNum;
+							case '-': return leftNum - rightNum;
+							case '*': return leftNum * rightNum;
+							case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+						}
+					}
+					// Math operation failed (non-numeric values)
+					return '<bad expression>';
+				} else {
+					// It's a simple path
+					var resolved = resolvePathOrValue(expression, data);
+					if (resolved === null) {
+						return '<bad expression>';
+					}
+					return resolved !== expression ? resolved : '<bad expression>';
+				}
+			});
+
+			return result;
+		};
+
+		instance.message = function($) {
+
+			let data = $?.data || {};
+
+			// Safeguard: if data is not an object (string, number, etc), treat as no jambonz_response
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			// Create data object from rows
+			var tagData = {};
+
+			// Process all rows
+			if (config.rows && Array.isArray(config.rows)) {
+				for (var i = 0; i < config.rows.length; i++) {
+					var row = config.rows[i];
+					var key = row.test1 || '';
+					var value = row.test2 || '';
+					var type = row.test3 || 'string';
+
+					// Only add the key-value pair if key is not empty
+					if (key) {
+						// Resolve value from template or use as-is
+						var resolvedValue = resolveValue(value, data);
+						// Apply type conversion
+						tagData[key] = convertValue(resolvedValue, type);
+					}
+				}
+			}
+
+			var tagVerb = {
+				verb: 'tag',
+				data: tagData
+			};
+
+			$.data = buildOutput(data, config, tagVerb);
+			$.send('output');
+			$.destroy();
+		};
+
+		instance.configure = function() {
+			// Configuration changed
+		};
+
+		instance.configure();
+
+	};
+
+</script>
+
+<settings>
+	<div class="padding">
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help"><b>Tag Configuration</b> - Define key-value pairs for the output object</div>
+				<div class="help">Values support templates with paths, math operations, and concatenation</div>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-12 m">
+				<button class="exec button button-small" data-exec="dynamo_addrow"><i class="ti ti-plus-circle" style="color: #28a745;"></i>Add tag</button>
+			</div>
+		</div>
+		<hr />
+		<ui-bind path="?.rows" config="template:div.dynamo-row --> data-id;show:value && value.length" class="dynamo-rows">
+			<script type="text/html">
+				{{ foreach row in value }}
+				<div class="dynamo-row" data-id="{{ row.id }}">
+					<div class="row dynamo-row-container">
+						<div class="dynamo-label">
+							<label>Key:</label>
+						</div>
+						<div class="dynamo-field dynamo-field-key">
+							<ui-component name="input" path="?.rows[{{ $index }}].test1" config="placeholder:Enter Tag name"></ui-component>
+						</div>
+						<div class="dynamo-label">
+							<label>Value:</label>
+						</div>
+						<div class="dynamo-field dynamo-field-value">
+							<ui-component name="input" path="?.rows[{{ $index }}].test2" config="placeholder:Enter Tag value"></ui-component>
+						</div>
+						<div class="dynamo-label">
+							<label>Type:</label>
+						</div>
+						<div class="dynamo-field dynamo-field-type">
+							<ui-component name="input" path="?.rows[{{ $index }}].test3" config="dirsource:string|String,number|Number,boolean|Boolean"></ui-component>
+						</div>
+						<div class="dynamo-field-remove">
+							<button class="exec dynamo-remove-btn" data-exec="dynamo_removerow"><i class="ti ti-trash"></i></button>
+						</div>
+					</div>
+				</div>
+				{{ end }}
+			</script>
+		</ui-bind>
+		<div data-bind="?.rows__hide:value && value.length" class="hidden">
+			<div class="center gray padding">No tags added yet. Click "Add tag" to create your first tag.</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #c85a5a !important; }
+	.CLASS header { background-color: #c85a5a; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+	.dynamo-rows { margin-top: 15px; }
+	.dynamo-row { margin-bottom: 5px; }
+
+	.dynamo-row-container {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		margin-bottom: 0 !important;
+	}
+
+	.dynamo-label {
+		text-align: right;
+		padding-right: 3px;
+		white-space: nowrap;
+		min-width: 45px;
+	}
+
+	.dynamo-label label {
+		margin-bottom: 0 !important;
+		line-height: 32px;
+		font-size: 13px;
+	}
+
+	.dynamo-field {
+		flex: 1;
+	}
+
+	.dynamo-field-key {
+		flex: 0 0 180px;
+	}
+
+	.dynamo-field-value {
+		flex: 0 0 240px;
+	}
+
+	.dynamo-field-type {
+		flex: 0 0 120px;
+	}
+
+	.dynamo-field-remove {
+		flex: 0 0 auto;
+	}
+
+	.dynamo-remove-btn {
+		background-color: #dc3545;
+		border: none;
+		color: white;
+		cursor: pointer;
+		padding: 8px 12px;
+		border-radius: 4px;
+		height: 32px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		transition: background-color 0.2s;
+	}
+
+	.dynamo-remove-btn:hover {
+		background-color: #c82333;
+	}
+
+	.dynamo-remove-btn i {
+		font-size: 14px;
+	}
+
+	/* Input field styling for Key and Value */
+	.dynamo-field-key input,
+	.dynamo-field-value input {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark .dynamo-field-key input,
+	.ui-dark .dynamo-field-value input {
+		color: #6fa8dc !important;
+	}
+
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+</style>
+
+<script>
+	TOUCH(function(exports, reinit) {
+
+		exports.settings = function(meta) {
+			// Initialize rows array if empty
+			if (!meta.config.rows || !meta.config.rows.length) {
+				// Optionally add one default row
+			}
+		};
+
+	});
+
+	// Add row function
+	window.dynamo_addrow = function(el) {
+		var scope = el.scope();
+		var config = scope.get();
+
+		if (!config.rows) {
+			config.rows = [];
+		}
+
+		// Create new row with unique id
+		var newRow = {
+			id: Date.now().toString(36) + Math.random().toString(36).substring(2),
+			test1: '',
+			test2: '',
+			test3: 'string'
+		};
+
+		config.rows.push(newRow);
+		scope.set('rows', config.rows);
+		scope.change('*');
+	};
+
+	// Remove row function
+	window.dynamo_removerow = function(el) {
+		var scope = el.scope();
+		var config = scope.get();
+		var rowId = el.closest('[data-id]').attr('data-id');
+
+		if (config.rows) {
+			// Find and remove the row with matching id
+			for (var i = 0; i < config.rows.length; i++) {
+				if (config.rows[i].id === rowId) {
+					config.rows.splice(i, 1);
+					break;
+				}
+			}
+
+			scope.set('rows', config.rows);
+			scope.change('*');
+		}
+	};
+</script>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+
+<readme>
+# Jambonz Tag
+https://docs.jambonz.org/verbs/verbs/tag
+This component adds a Jambonz `tag` verb to the flow for adding custom metadata/tags to calls.
+
+
+## Configuration
+Each tag contains:
+- **Key**: The key name for the tag data
+- **Value**: The value for the tag data (supports static values and dynamic templates)
+- **Type**: Type conversion to apply (string, number, boolean)
+
+
+## Dynamic Value Templates
+Values support template syntax to read from input data, perform math operations, and concatenate text.
+
+### Example Input Data:
+```json
+{
+  "key1": "value1",
+  "key2": {
+    "key21": "value21"
+  },
+  "key3": [
+    {"key31": "value31"},
+    {"key32": "value32"}
+  ],
+  "key4": 10
+}
+```
+
+### Template Syntax:
+- **Static value**: `SomeText` → outputs `"SomeText"`
+- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1` → outputs `"value1"`
+- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21` → outputs `"value21"`
+- **Array path**: `{{ $data.key3[0].key31 }}` → reads from `$.data.key3[0].key31` → outputs `"value31"`
+
+### Math Operations:
+- `{{ $data.key4 + 5 }}` → `15`
+- `{{ $data.key4 - 3 }}` → `7`
+- `{{ $data.key4 * 2 }}` → `20`
+- `{{ $data.key4 / 2 }}` → `5`
+
+### Text Concatenation:
+- `{{ $data.key1 }} test1` → `"value1 test1"`
+- `{{ $data.key1 }}_test2` → `"value1_test2"`
+- `{{ $data.key1 }}-test3` → `"value1-test3"`
+- `{{ $data.key1 }}2345` → `"value12345"`
+- `prefix_{{ $data.key1 }}_suffix` → `"prefix_value1_suffix"`
+
+### Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $data.nonexistent }}` → `"<bad expression>"` (path doesn't exist)
+- `{{ $data.key1 + 5 }}` → `"<bad expression>"` (cannot add number to string)
+- `{{ $data.key2.invalid }}` → `"<bad expression>"` (invalid nested path)
+
+
+## Usage
+1. Click "Add tag" to create a new tag entry
+2. Fill in Key (key name) and Value (static or template)
+3. Select the Type for value conversion (defaults to "string")
+4. Add more tags as needed
+
+
+## Type Conversions
+- **string**: Converts value to string (default)
+- **number**: Converts value to number (returns 0 if conversion fails)
+- **boolean**: Converts value to boolean
+  - accepts: true/false, 1/0, yes/no
+  - returns `false` if conversion fails
+
+
+## Behavior
+- If `jambonz_response` array doesn't exist in input data, creates a new array with the tag verb
+- If `jambonz_response` array exists, appends the tag verb to the existing array
+- Multiple tags are merged into a single data object within the tag verb
+- If Key is empty in a tag, that tag is skipped
+- If duplicate keys exist, the last one wins
+- Type conversion is applied after template resolution and expression evaluation
+- Supports multiple templates in a single value (concatenation)
+- Math operations support: `+`, `-`, `*`, `/` (division by zero returns 0)
+- **Error handling**: All unsupported expressions return `"<bad expression>"`:
+  - Non-existent data paths (e.g., `{{ $data.nonexistent }}`)
+  - Invalid math operations (e.g., `{{ $data.key1 + 5 }}` where key1 is a string)
+  - Any expression that cannot be properly evaluated
+</readme>

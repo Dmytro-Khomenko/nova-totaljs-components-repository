@@ -1,0 +1,479 @@
+<script total>
+
+    exports.id = 'jambonz_transfer';
+    exports.name = 'Jambonz [transfer]';
+    exports.group = 'Jambonz';
+    exports.icon = 'ti ti-atom';
+    exports.author = 'Demon';
+    exports.version = '1.2.1';
+    exports.config = {
+        forwardInputData: false,
+        referTo: '',
+        referredBy: '',
+        headers: {},
+        eventHook: '',
+        actionHook: '',
+        enableHookWaiting: false,
+        actionAttempts: 1,
+        actionWaitTime: 5,
+        totalNoResponseWaitTime: 10,
+        defineActions: ''
+    };
+    exports.inputs = [{ id: 'input', name: 'Input' }];
+    exports.outputs = [{ id: 'output', name: 'Output' }];
+  
+    exports.make = function(instance, config) {
+
+        function buildOutput(data, config, transferVerb) {
+            if (config.forwardInputData) {
+                var output = {};
+
+                // Extract or determine forwarded_data
+                if (data.forwarded_data !== undefined) {
+                    // Input already has forwarded_data, use it as is
+                    output.forwarded_data = data.forwarded_data;
+                } else {
+                    // No forwarded_data in input, create it from input data
+                    // Exclude jambonz_response if it exists
+                    var forwardData = {};
+                    for (var key in data) {
+                        if (key !== 'jambonz_response' && data.hasOwnProperty(key)) {
+                            forwardData[key] = data[key];
+                        }
+                    }
+                    output.forwarded_data = forwardData;
+                }
+
+                // Handle jambonz_response - always combine into array
+                var responses = [];
+
+                if (data.jambonz_response !== undefined) {
+                    if (Array.isArray(data.jambonz_response)) {
+                        // Already an array, clone and add all items
+                        responses = data.jambonz_response.slice();
+                    } else {
+                        // Single response, add it
+                        responses.push(data.jambonz_response);
+                    }
+                }
+
+                // Add current verb
+                responses.push(transferVerb);
+                output.jambonz_response = responses;
+
+                return output;
+            }
+
+            // Forward disabled - strip forwarded_data, only pass jambonz_response
+            if (!('jambonz_response' in data)) {
+                return {
+                    jambonz_response: [transferVerb]
+                };
+            }
+            else if (Array.isArray(data.jambonz_response)) {
+                data.jambonz_response.push(transferVerb);
+                return {
+                    jambonz_response: data.jambonz_response
+                };
+            }
+            else {
+                return {
+                    jambonz_response: [transferVerb]
+                };
+            }
+        }
+  
+        var resolvePathOrValue = function(expr, data) {
+            expr = expr.trim();
+            if (expr.startsWith('$data.')) {
+                var path = expr.substring(6);
+                var value = U.get(data, path);
+                return value !== undefined ? value : null;
+            }
+            var num = parseFloat(expr);
+            if (!isNaN(num) && expr === num.toString()) {
+                return num;
+            }
+            return expr;
+        };
+  
+        var resolveValue = function(valueStr, data) {
+            if (typeof valueStr !== 'string') {
+                return valueStr;
+            }
+  
+            var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+                expression = expression.trim();
+  
+                var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+                if (mathMatch) {
+                    var left = resolvePathOrValue(mathMatch[1], data);
+                    var operator = mathMatch[2];
+                    var right = resolvePathOrValue(mathMatch[3], data);
+  
+                    if (left === null || right === null) {
+                        return '<bad expression>';
+                    }
+  
+                    var leftNum = parseFloat(left);
+                    var rightNum = parseFloat(right);
+  
+                    if (!isNaN(leftNum) && !isNaN(rightNum)) {
+                        switch (operator) {
+                            case '+': return leftNum + rightNum;
+                            case '-': return leftNum - rightNum;
+                            case '*': return leftNum * rightNum;
+                            case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+                        }
+                    }
+                    return '<bad expression>';
+                } else {
+                    var resolved = resolvePathOrValue(expression, data);
+                    if (resolved === null) {
+                        return '<bad expression>';
+                    }
+                    return resolved !== expression ? resolved : '<bad expression>';
+                }
+            });
+  
+            return result;
+        };
+  
+        instance.message = function($) {
+  
+            let data = $?.data || {};
+  
+            if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+                data = {};
+            }
+  
+            var transferVerb = {
+                verb: 'sip:refer',
+                referTo: resolveValue(config.referTo || '', data)
+            };
+  
+            if (config.referredBy && config.referredBy.trim() !== '') {
+                transferVerb.referredBy = resolveValue(config.referredBy.trim(), data);
+            }
+  
+            if (config.headers && typeof config.headers === 'object' && Object.keys(config.headers).length > 0) {
+                var headers = {};
+                var hasHeaders = false;
+                for (var key in config.headers) {
+                    if (config.headers.hasOwnProperty(key) && config.headers[key]) {
+                        headers[resolveValue(key, data)] = resolveValue(config.headers[key], data);
+                        hasHeaders = true;
+                    }
+                }
+                if (hasHeaders) {
+                    transferVerb.headers = headers;
+                }
+            }
+  
+            if (config.eventHook && config.eventHook.trim() !== '') {
+                transferVerb.eventHook = resolveValue(config.eventHook.trim(), data);
+            }
+  
+            if (config.actionHook && config.actionHook.trim() !== '') {
+                transferVerb.actionHook = resolveValue(config.actionHook.trim(), data);
+            }
+  
+            if (config.enableHookWaiting && config.actionHook && config.actionHook.trim() !== '') {
+                transferVerb.actionHookDelayAction = {
+                    enabled: true,
+                    retries: config.actionAttempts || 1,
+                    noResponseTimeout: config.actionWaitTime || 5,
+                    noResponseGiveUpTimeout: config.totalNoResponseWaitTime || 10
+                };
+  
+                if (config.defineActions && config.defineActions.trim() !== '') {
+                    var resolvedActions = resolveValue(config.defineActions.trim(), data);
+  
+                    try {
+                        var actionsJson;
+  
+                        try {
+                            actionsJson = JSON.parse(resolvedActions);
+                        } catch (e) {
+                            actionsJson = JSON.parse('[' + resolvedActions + ']');
+                        }
+  
+                        if (Array.isArray(actionsJson)) {
+                            transferVerb.actionHookDelayAction.actions = actionsJson;
+                        } else {
+                            transferVerb.actionHookDelayAction.actions = [actionsJson];
+                        }
+                    } catch (e) {
+                        // If JSON is invalid, skip actions
+                    }
+                }
+            }
+  
+            $.data = buildOutput(data, config, transferVerb);
+            $.send('output');
+            $.destroy();
+        };
+  
+    };
+  
+  </script>
+  
+  <settings>
+  
+    <div class="padding">
+        <div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+            <div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+                <ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-12 m">
+                <div class="help section-header"><b>General settings</b></div>
+            </div>
+        </div>
+  
+        <hr class="nmt nmb" />
+  
+        <br />
+  
+        <div class="row">
+            <div class="col-md-6 m">
+                <ui-component name="input" path="?.referTo" config="required:true;placeholder:+15083084809">Refer To</ui-component>
+            </div>
+            <div class="col-md-6 m">
+                <ui-component name="input" path="?.referredBy" config="placeholder:+15083123456">Referred By (optional)</ui-component>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-md-12 m">
+                <ui-component name="keyvalue" path="?.headers" config="placeholderkey:Header name;placeholdervalue:Header value and press enter">Custom SIP Headers</ui-component>
+            </div>
+        </div>
+  
+        <hr class="nmt nmb section-divider" />
+  
+        <div class="row">
+            <div class="col-md-12 m">
+                <div class="help section-header"><b>Hook settings</b></div>
+            </div>
+        </div>
+  
+        <hr class="nmt nmb" />
+  
+        <br />
+  
+        <div class="row">
+            <div class="col-md-6 m">
+                <ui-component name="input" path="?.eventHook" config="placeholder:https://example.com/events">Event Hook (optional)</ui-component>
+            </div>
+            <div class="col-md-6 m">
+                <ui-component name="input" path="?.actionHook" config="placeholder:https://example.com/action">Action Hook (optional)</ui-component>
+            </div>
+        </div>
+  
+        <br />
+  
+        <div class="row">
+            <div class="col-md-12 m">
+                <ui-component name="input" path="?.enableHookWaiting" config="type:checkbox">Enable hook waiting management</ui-component>
+            </div>
+        </div>
+        <div data-bind="?.enableHookWaiting__show:value" class="hidden">
+            <div class="row">
+                <div class="col-md-4 m">
+                    <ui-component name="input" path="?.actionAttempts" config="type:number;min:1;increment:1">Action Attempts</ui-component>
+                    <div class="help">Number of retry attempts (default: 1)</div>
+                </div>
+                <div class="col-md-4 m">
+                    <ui-component name="input" path="?.actionWaitTime" config="type:number;min:1;increment:1">Action Wait Time (sec)</ui-component>
+                    <div class="help">Timeout for each request (default: 5)</div>
+                </div>
+                <div class="col-md-4 m">
+                    <ui-component name="input" path="?.totalNoResponseWaitTime" config="type:number;min:1;increment:1">Total No-Response Wait (sec)</ui-component>
+                    <div class="help">Total timeout for all attempts (default: 10)</div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-12 m">
+                    <ui-component name="input" path="?.defineActions" config="type:textarea;rows:4;placeholder:[{...}]">Define Actions</ui-component>
+                    <div class="help">JSON array of actions to take on timeout/error</div>
+                </div>
+            </div>
+  
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="ui-example">
+                        <div class="ui-example-label">Example of action hook delayed actions (nested audio - say):</div>
+                        <div class="ui-example-text">{<br>&nbsp;&nbsp;"verb": "say",<br>&nbsp;&nbsp;"text": "Sorry, unable to process your request at this time",<br>&nbsp;&nbsp;"synthesizer": {<br>&nbsp;&nbsp;&nbsp;&nbsp;"vendor": "google",<br>&nbsp;&nbsp;&nbsp;&nbsp;"language": "uk-UA",<br>&nbsp;&nbsp;&nbsp;&nbsp;"voice": "uk-UA-Chirp3-HD-Achernar"<br>&nbsp;&nbsp;}<br>}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+  
+        <hr class="nmt nmb section-divider" />
+    </div>
+  </settings>
+  
+  <style>
+  .CLASS { border-color: #c85a5a !important; }
+  .CLASS header { background-color: #c85a5a; color: white; }
+  .CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+  
+  /* Section styling */
+  .section-header {
+      font-size: 16px !important;
+      margin-bottom: 8px;
+      padding-top: 4px;
+  }
+  
+  .section-divider {
+      margin-bottom: 20px !important;
+  }
+  
+  /* Input field styling for keyvalue component */
+  #flow_settings .ui-keyvalue input[type="text"] {
+      font-family: Consolas, monospace !important;
+      color: darkblue !important;
+  }
+  
+  .ui-dark #flow_settings .ui-keyvalue input[type="text"] {
+      color: #6fa8dc !important;
+  }
+  
+  /* Textarea and input field styling */
+  #flow_settings textarea[name="defineActions"],
+  #flow_settings input[name="referTo"],
+  #flow_settings input[name="referredBy"],
+  #flow_settings input[name="eventHook"],
+  #flow_settings input[name="actionHook"] {
+      font-family: Consolas, monospace !important;
+      font-size: 12px !important;
+      line-height: 1.5 !important;
+      color: darkblue !important;
+  }
+  
+  #flow_settings input[type="number"] {
+      font-family: Consolas, monospace !important;
+      color: darkblue !important;
+  }
+  
+  .ui-dark #flow_settings textarea[name="defineActions"],
+  .ui-dark #flow_settings input[name="referTo"],
+  .ui-dark #flow_settings input[name="referredBy"],
+  .ui-dark #flow_settings input[name="eventHook"],
+  .ui-dark #flow_settings input[name="actionHook"],
+  .ui-dark #flow_settings input[type="number"] {
+      color: #6fa8dc !important;
+  }
+  
+  #flow_settings textarea[name="defineActions"] {
+      height: 288px !important;
+  }
+  
+  /* Example label styling */
+  .ui-example-label {
+      margin-bottom: 5px !important;
+      font-size: 12px;
+      color: #777;
+      height: 17.15px;
+      line-height: 17.15px;
+  }
+  
+  /* Textarea input labels - match the example label styling */
+  #flow_settings .ui-input-label {
+      margin-bottom: 5px !important;
+      height: 17.15px !important;
+      line-height: 17.15px !important;
+  }
+  
+  /* Example box styling to match ui-input structure */
+  .ui-example {
+      margin-bottom: 10px;
+  }
+  
+  .ui-example-text {
+      padding: 8px;
+      background-color: #f5f5f5;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #999;
+      overflow-y: auto;
+  }
+  
+  .ui-dark .ui-example-text {
+      background-color: #2a2a2a;
+      border-color: #404040;
+      color: #888;
+  }
+
+  #flow_settings .forward-banner .m {
+      margin-bottom: 0 !important;
+  }
+  </style>
+  
+  <body>
+  <header>
+    <i class="$ICON"></i>$NAME
+  </header>
+  </body>
+  
+  <readme>
+  # Jambonz Transfer (sip:refer)
+  https://docs.jambonz.org/verbs/verbs/sip-refer
+  This component adds a Jambonz `sip:refer` verb to the flow for transferring calls using SIP REFER method.
+  
+  
+  ## Configuration
+  - **Refer To** (required): The SIP URI or phone number to transfer to (supports templates)
+  - **Referred By** (optional): The SIP URI indicating who is referring the call (supports templates)
+  - **Custom SIP Headers** (optional): Key-value pairs for custom SIP headers
+  - **Event Hook** (optional): URL for event notifications during transfer (supports templates)
+  - **Action Hook** (optional): URL for completion notifications (supports templates)
+  - **Enable hook waiting management**: Configure retry logic for action hook calls
+  
+  
+  ## Dynamic Value Templates
+  All fields (Refer To, Referred By, headers, Event Hook, Action Hook, Define Actions) support template syntax.
+  
+  ### Example Input Data:
+  ```json
+  {
+    "targetNumber": "+15083084809",
+    "callerId": "Customer Service",
+    "webhookBase": "https://example.com",
+    "transferType": "continue"
+  }
+  ```
+  
+  ### Template Syntax:
+  - **Static value**: `+15083084809` → outputs `"+15083084809"`
+  - **Dynamic path**: `{{ $data.targetNumber }}` → reads from `$.data.targetNumber` → outputs `"+15083084809"`
+  - **Nested path**: `{{ $data.customer.phoneNumber }}` → reads from `$.data.customer.phoneNumber`
+  
+  ### Text Concatenation:
+  - `sip:{{ $data.targetNumber }}@example.com` → `"sip:+15083084809@example.com"`
+  - `{{ $data.webhookBase }}/{{ $data.transferType }}` → `"https://example.com/continue"`
+  - `{{ $data.webhookBase }}/event-notify` → `"https://example.com/event-notify"`
+  - `X-Customer-ID_{{ $data.callerId }}` → `"X-Customer-ID_Customer Service"`
+  
+  ### Error Handling:
+  Unsupported expressions return `"<bad expression>"`:
+  - `{{ $data.nonexistent }}` → `"<bad expression>"` (path doesn't exist)
+  - `{{ $data.callerId + 5 }}` → `"<bad expression>"` (cannot add number to string)
+  - `{{ $data.nested.invalid }}` → `"<bad expression>"` (invalid nested path)
+  
+  
+  ## Behavior
+  - If `jambonz_response` array doesn't exist in input data, creates a new array with the transfer verb
+  - If `jambonz_response` array exists, appends the transfer verb to the existing array
+  - Optional fields (referredBy, eventHook, actionHook) are only included if provided
+  - actionHookDelayAction is only added when hook waiting management is enabled and actionHook is provided
+  - Template expressions are resolved before building the transfer verb
+  - Invalid template expressions return `"<bad expression>"`
+  - Headers are only added if both key and value are provided
+  
+  </readme>

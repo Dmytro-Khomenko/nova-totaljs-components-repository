@@ -1,0 +1,222 @@
+<script total>
+
+	exports.id = 'debug';
+	exports.name = 'Debug';
+	exports.group = 'Common';
+	exports.version = '4';
+	exports.icon = 'ti ti-circle-alt';
+	exports.color = '#E73323';
+	exports.author = 'Total.js';
+	exports.config = { repo: false, debug: true, data: true, watch: [] };
+	exports.meta = { singleton: true };
+
+	exports.make = function(instance, config) {
+
+		var filter = null;
+
+		function serializer(key, value) {
+			return value && value.type === 'Buffer' && value.data ? ('<Buffer ' + value.data.splice(0, 10).map(n => n.toString(16).padLeft(2, '0')).join('') + '...') : value;
+		}
+
+		instance.main.ondebug = function(a, b, c, d) {
+
+			if (filter && !filter[this.id])
+				return;
+
+			NOW = new Date();
+
+			var output = [];
+
+			if (a !== undefined)
+				output.push(a);
+			if (b !== undefined)
+				output.push(b);
+			if (c !== undefined)
+				output.push(c);
+			if (d !== undefined)
+				output.push(d);
+
+			instance.status({ name: this.module.name, type: 'debug', date: NOW, data: JSON.stringify(output, serializer) });
+		};
+
+		instance.logger && instance.logger(function($) {
+
+			if (filter && !filter[$.fromid])
+				return;
+
+			if (!config.data && !config.repo)
+				return;
+
+			var data = $.data;
+
+			if (config.data !== false) {
+				if (data instanceof Buffer)
+					data = data.toString('hex').substring(0, 200);
+			}
+
+			var count = 0;
+
+			for (var key in config) {
+				if (config[key])
+					count++;
+			}
+
+			var output = count > 1 ? {} : null;
+
+			if (config.repo) {
+				if (output)
+					output.repo = $.repo;
+				else
+					output = $.repository;
+			}
+
+			if (config.data) {
+				if (output)
+					output.data = $.data;
+				else
+					output = $.data;
+			}
+
+			NOW = new Date();
+			output && instance.status({ name: $.from.module.name, type: 'message', date: NOW, data: JSON.stringify(output, serializer) });
+		});
+
+		instance.configure = function() {
+			if (config.watch && config.watch.length) {
+				filter = {};
+				for (var id of config.watch)
+					filter[id] = 1;
+			} else
+				filter = null;
+		};
+
+		instance.trigger = function() {
+
+			var components = instance.main.meta.components;
+			var schema = instance.main.meta.flow;
+
+			for (var key in schema) {
+				var m = schema[key];
+				if (m.component) {
+					var c = components[m.component];
+					if (c.name === 'Debug')
+						m.status({});
+				}
+			}
+
+		};
+
+		instance.configure();
+
+		if (!instance.logger)
+			instance.throw('You need to update Total.js framework');
+
+	};
+
+</script>
+
+<style>
+	.CLASS { border-color: #E73323 !important; }
+	.CLASS .area { background: #FEE7E7; }
+	.CLASS header i { animation: 1s blink infinite alternate forwards; border-radius: 100px; }
+	.CLASS footer { padding: 10px; }
+	.CLASS pre, .debugform pre { font-size: 10px; margin: 0; padding: 5px; background-color: #F0F0F0; border-radius: var(--radius); }
+	.debugform .date { font-size: 11px; margin-bottom: 5px; }
+	.debugform .name { float: right; font-size: 11px; font-weight: bold; }
+	.debugform pre:before { display: block; color: rgba(0, 0, 0, 0.3); margin-bottom: 5px; }
+	.debugform .type-debug pre { background: #e6f4f7; }
+	.debugform .type-debug pre:before { content: 'Debug'; }
+	.debugform .type-message pre:before { content: 'Message'; }
+	.ui-dark .CLASS .area { background: #7e4d4d; }
+	.ui-dark .CLASS pre, .ui-dark .debugform pre { background-color: #404040; }
+	.ui-dark .debugform pre:before { color: rgba(255, 255, 255, 0.3); }
+	.ui-dark .debugform .type-debug pre { background: #283857; }
+</style>
+
+<readme>
+The component can print the payload of incoming messages and `instance.debug()` log messages in JSON format.
+</readme>
+
+<settings>
+	<div class="padding">
+		<ui-component name="input" path="?.repo" config="type:checkbox">Shows repository</ui-component>
+		<ui-component name="input" path="?.data" config="type:checkbox">Shows data</ui-component>
+		<ui-component name="input" path="?.debug" config="type:checkbox">Shows debug messages</ui-component>
+		<hr />
+		<ui-component name="input" path="%debugsearch" config="type:search;placeholder:Search components" class="m">Search</ui-component>
+		<ui-component name="search" path="%debugsearch" config="selector:figure">
+			<ui-component name="selection" path="?.watch" config="datasource:flow.instances;click:figure">
+				<ui-bind path="flow.instances" config="template" class="block listing2 small">
+					<script type="text/html">
+						{{ foreach m in value }}
+						<figure data-search="{{ m.id }} {{ m.Component.name }}{{ if m.note }} {{ m.note }}{{ fi }}">
+							<section>
+								<span class="selection" data-id="{{ m.id }}"><i class="ti ti-eye"></i></span>{{ m.Component.name }}{{ if m.note }}<span class="gray ml10">{{ m.note }}</span>{{ fi }}
+							</section>
+						</figure>
+						{{ end }}
+					</script>
+				</ui-bind>
+			</ui-component>
+		</ui-component>
+	</div>
+</settings>
+
+<body>
+	<header>
+		<i class="ti ti-bull" style="background:#E73323;color:#FFF"></i><b>NAME</b>
+	</header>
+	<footer>
+		<div><button class="button" name="toggle"><i class="ti ti-eye"></i>Toggle</button></div>
+	</footer>
+</body>
+
+<script>
+
+	TOUCH(function(exports, reinit) {
+
+		var services = [];
+
+		if (!reinit) {
+
+			if (!W.debugwindow) {
+				CACHEPATH('common.$debug', '1 week');
+				W.debugwindow = [];
+				W.debugwindowclear = function() {
+					for (var key in flow.data) {
+						var com = flow.data[key];
+						if (com.name === 'debug') {
+							flowinstances.instances[key].clear();
+							break;
+						}
+					}
+				};
+
+				$(document.body).append('<ui-component name="box" path="common.$debug" config="if:debugform;align:right;width:420;background:false;transparent:true;title:Debug panel;icon:ti ti-bug;zindex:5;$id:debugwindowbox"><nav><button class="exec" data-exec="debugwindowclear"><i class="ti ti-remove red"></i>Clear</button></nav><div class="padding debugform" id="debugformbody"></div></ui-component>');
+
+				exports.element.on('click', 'button', function() {
+					SET('common.$debug', common.$debug ? '' : 'debugform');
+				});
+			}
+		}
+
+		exports.close = function() {
+			NUL('common.$debug');
+			delete W.debugwindow;
+			delete W.debugwindowclear;
+			SETTER('#debugwindowbox/remove');
+		};
+
+		exports.clear = function() {
+			exports.trigger();
+			$('#debugformbody').empty();
+		};
+
+		exports.status = function(data) {
+			if (data && data.date)
+				$('#debugformbody').prepend('<div class="m type-{3}"><div class="name">{0}</div><div class="date"><i class="ti ti-calendar mr5"></i>{1}</div><pre class="json">{2}</pre></div>'.format(data.name, data.date.format('[ts]'), Thelpers.jsonformat(JSON.stringify(JSON.parse(data.data), '\t')), data.type || 'message'));
+		};
+
+	});
+
+</script>

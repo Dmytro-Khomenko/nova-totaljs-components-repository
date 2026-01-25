@@ -1,0 +1,200 @@
+<script total>
+
+	exports.id = 'jambonz_answer';
+	exports.name = 'Jambonz [answer]';
+	exports.group = 'Jambonz';
+	exports.icon = 'ti ti-atom';
+	exports.author = 'Demon';
+	exports.version = '1.2.0';
+
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }];
+
+	exports.config = {
+		forwardInputData: false
+	};
+
+	exports.meta = { settingswidth: 400 };
+	
+	exports.make = function (instance, config) {
+		
+		function buildOutput(data, config, answerVerb) {
+			if (config.forwardInputData) {
+				var output = {};
+
+				// Extract or determine forwarded_data
+				if (data.forwarded_data !== undefined) {
+					// Input already has forwarded_data, use it as is
+					output.forwarded_data = data.forwarded_data;
+				} else {
+					// No forwarded_data in input, create it from input data
+					// Exclude jambonz_response if it exists
+					var forwardData = {};
+					for (var key in data) {
+						if (key !== 'jambonz_response' && data.hasOwnProperty(key)) {
+							forwardData[key] = data[key];
+						}
+					}
+					output.forwarded_data = forwardData;
+				}
+
+				// Handle jambonz_response - always combine into array
+				var responses = [];
+
+				if (data.jambonz_response !== undefined) {
+					if (Array.isArray(data.jambonz_response)) {
+						// Already an array, clone and add all items
+						responses = data.jambonz_response.slice();
+					} else {
+						// Single response, add it
+						responses.push(data.jambonz_response);
+					}
+				}
+
+				// Add current verb
+				responses.push(answerVerb);
+				output.jambonz_response = responses;
+
+				return output;
+			}
+
+			// Forward disabled - strip forwarded_data, only pass jambonz_response
+			if (!('jambonz_response' in data)) {
+				return {
+					jambonz_response: [answerVerb]
+				};
+			}
+			else if (Array.isArray(data.jambonz_response)) {
+				data.jambonz_response.push(answerVerb);
+				return {
+					jambonz_response: data.jambonz_response
+				};
+			}
+			else {
+				return {
+					jambonz_response: [answerVerb]
+				};
+			}
+		}
+
+		instance.message = function ($) {
+			let data = $?.data || {};
+			
+			// Safeguard: if data is not an object (string, number, etc), treat as no jambonz_response
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+			
+			var answerVerb = { verb: 'answer' };
+			
+			// Use buildOutput to properly handle forwarding
+			$.data = buildOutput(data, config, answerVerb);
+			$.send('output');
+			$.destroy();
+		};
+	};
+</script>
+
+<settings>
+	<div class="padding">
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help">This component answers an incoming call by sending a SIP 200 OK response.</div>
+			</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #c85a5a !important; }
+	.CLASS header { background-color: #c85a5a; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important;	}
+	
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+# Jambonz Answer
+https://docs.jambonz.org/verbs/verbs/answer
+This component adds a Jambonz `answer` verb to the flow for answering incoming calls.
+
+
+## Configuration
+- **Forward input data**: When enabled, preserves original input data alongside the jambonz_response array
+
+
+## Behavior
+- Answers an incoming call by sending a `SIP 200 OK`
+- If `jambonz_response` array doesn't exist in input data, creates a new array with the answer verb
+- If `jambonz_response` array exists, appends the answer verb to the existing array
+- When "Forward input data" is disabled (default), only passes through `jambonz_response` without `forwarded_data`
+- When "Forward input data" is enabled, includes both `forwarded_data` and `jambonz_response` in output
+
+
+## Input/Output Examples
+
+### Standalone with Forward OFF (default):
+**Input:** `{ userId: "123", callId: "abc" }`
+**Output:** `{ jambonz_response: [{ verb: "answer" }] }`
+
+### Standalone with Forward ON:
+**Input:** `{ userId: "123", callId: "abc" }`
+**Output:** 
+```json
+{
+  "forwarded_data": { "userId": "123", "callId": "abc" },
+  "jambonz_response": [{ "verb": "answer" }]
+}
+```
+
+### Sequential with Forward OFF:
+**Input:** `{ jambonz_response: [{ verb: "say", text: "Hello" }] }`
+**Output:** 
+```json
+{
+  "jambonz_response": [
+    { "verb": "say", "text": "Hello" },
+    { "verb": "answer" }
+  ]
+}
+```
+
+### Sequential with Forward ON:
+**Input:** 
+```json
+{
+  "forwarded_data": { "userId": "123" },
+  "jambonz_response": [{ "verb": "say", text: "Hello" }]
+}
+```
+**Output:**
+```json
+{
+  "forwarded_data": { "userId": "123" },
+  "jambonz_response": [
+    { "verb": "say", "text": "Hello" },
+    { "verb": "answer" }
+  ]
+}
+```
+</readme>

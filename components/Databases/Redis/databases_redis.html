@@ -1,0 +1,1478 @@
+<script total>
+
+	exports.id = 'redis';
+	exports.name = 'Redis';
+	exports.group = 'Databases';
+	exports.icon = 'ti ti-database-alt';
+	exports.author = 'Total.js';
+	exports.version = '1.16.1';
+	exports.config = {
+    forwardInputData: false,
+		host: '',
+		port: 6379,
+		database: 0,
+		password: '',
+		operation: 'INFO',
+		keyPattern: '*',
+		keysCommand: 'SEARCH',
+		keysReturnArray: false,
+		keysOnlyValues: false,
+		keysToDelete: '',
+		keysFlushAll: false,
+		stringCommand: 'SET',
+		stringKeys: '',
+		stringValue: '',
+		stringTTL: 0,
+		listCommand: 'LENGTH',
+		listKey: '',
+		listFrom: 0,
+		listTo: 0,
+		listValues: '',
+		listPosition: false,
+		listCount: 1,
+		hashCommand: 'GET',
+		hashKey: '',
+		hashFields: '',
+		hashJsonSupport: false,
+		hashTTL: 0
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }];
+
+	exports.npm = ['redis'];
+	exports.meta = { settingswidth: 800 };
+
+	exports.make = function(instance, config) {
+
+		var redis = require('redis');
+		var client = null;
+		var isConnected = false;
+
+		var resolvePathOrValue = function(expr, data, instance, $) {
+			expr = expr.trim();
+
+			// Handle $FLOW_VARS for global variables (Replicated from genesys_oauth.html)
+			if (expr.startsWith('$FLOW_VARS.')) {
+				var path = expr.substring(11); // Remove '$FLOW_VARS.'
+				// Access global variables from instance.main.variables
+				var value = instance.main.variables ? instance.main.variables[path] : undefined;
+				if (value === undefined && instance.main.variables2) {
+					// Fallback to variables2 if not found in variables
+					value = instance.main.variables2[path];
+				}
+				return value !== undefined ? value : null;
+			}
+
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+			var num = parseFloat(expr);
+			if (!isNaN(num) && expr === num.toString()) {
+				return num;
+			}
+			return expr;
+		};
+
+		var resolveValue = function(valueStr, data, instance, $) {
+			if (typeof valueStr !== 'string') {
+				return valueStr;
+			}
+      // Handle special case where user provides {{ $data }} directly
+      if (valueStr.trim() === '{{ $data }}') {
+        try {
+          return JSON.stringify(data);
+        } catch (e) {
+          return '<bad expression>';
+        }
+      }
+
+			var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				var mathMatch = expression.match(/^(.+?)\s*([+\-*/])\s*(.+)$/);
+				if (mathMatch) {
+					var leftValue = resolvePathOrValue(mathMatch[1], data, instance, $);
+					var rightValue = resolvePathOrValue(mathMatch[3], data, instance, $);
+
+					if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+						switch (mathMatch[2]) {
+							case '+': return leftValue + rightValue;
+							case '-': return leftValue - rightValue;
+							case '*': return leftValue * rightValue;
+							case '/': return leftValue / rightValue;
+						}
+					} else {
+						return '<bad expression>';
+					}
+				}
+
+				var value = resolvePathOrValue(expression, data, instance, $);
+				if (value === null || value === undefined)
+					return '<bad expression>';
+				return value;
+			});
+
+			return result;
+		};
+
+		var getKeyValue = function(client, key) {
+			return client.type(key).then(function(type) {
+				if (type === 'string') {
+					return client.get(key).then(function(val) { return val; });
+				} else if (type === 'list') {
+					return client.lRange(key, 0, -1);
+				} else if (type === 'set') {
+					return client.sMembers(key);
+				} else if (type === 'zset') {
+					return client.zRange(key, 0, -1, { withScores: true });
+				} else if (type === 'hash') {
+					return client.hGetAll(key);
+				} else {
+					return null;
+				}
+			});
+		};
+
+		var connect = function($, data, callback) {
+			if (client && isConnected) {
+				callback(null, client);
+				return;
+			}
+
+			var resolvedHost = resolveValue(config.host || '', data, instance, $);
+			var resolvedPassword = resolveValue(config.password || '', data, instance, $);
+      var resolvedPortStr = resolveValue(config.port.toString() || '6379', data, instance, $);
+      var resolvedPort = parseInt(resolvedPortStr, 10) || 6379;
+
+			if (!resolvedHost || resolvedHost === '<bad expression>') {
+				callback('Host is required or template expression is invalid');
+				return;
+			}
+
+			var redisConfig = {
+				socket: {
+					host: resolvedHost,
+					port: resolvedPort
+				},
+				database: config.database !== undefined ? config.database : 0
+			};
+
+			if (resolvedPassword && resolvedPassword.trim() !== '' && resolvedPassword !== '<bad expression>') {
+				redisConfig.password = resolvedPassword;
+			}
+
+			instance.status('Connecting to ' + resolvedHost + ':' + resolvedPort + '...', 2000);
+
+			client = redis.createClient(redisConfig);
+
+			client.on('error', function(err) {
+				isConnected = false;
+				instance.status('Error: ' + err.message, 5000);
+			});
+
+			client.connect().then(function() {
+				isConnected = true;
+				instance.status('Connected to ' + resolvedHost + ':' + resolvedPort, 3000);
+				callback(null, client);
+			}).catch(function(err) {
+				isConnected = false;
+				instance.status('Connection failed: ' + err.message, 5000);
+				callback(err);
+			});
+		};
+
+		// Helper function to deeply parse JSON strings in nested structures (for KEYS:SEARCH)
+		var deepParseJSON = function(obj) {
+			if (obj === null || obj === undefined) {
+				return obj;
+			}
+
+			// If it's a string, try to parse it as JSON
+			if (typeof obj === 'string') {
+				var trimmed = obj.trim();
+				if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+					try {
+						var parsed = JSON.parse(trimmed);
+						// Recursively parse the result in case there are nested stringified JSON
+						return deepParseJSON(parsed);
+					} catch (e) {
+						// If parsing fails, return original value
+						return obj;
+					}
+				}
+				return obj;
+			}
+
+			// If it's an array, recursively parse each element
+			if (Array.isArray(obj)) {
+				return obj.map(function(item) {
+					return deepParseJSON(item);
+				});
+			}
+
+			// If it's an object, recursively parse each property value
+			if (typeof obj === 'object') {
+				var result = {};
+				for (var key in obj) {
+					if (Object.prototype.hasOwnProperty.call(obj, key)) {
+						result[key] = deepParseJSON(obj[key]);
+					}
+				}
+				return result;
+			}
+
+			// For other types (number, boolean, etc.), return as-is
+			return obj;
+		};
+
+		instance.message = function($) {
+
+			function buildOutput(data, config, redisResponse) {
+				if (config.forwardInputData) {
+					return {
+						forwarded_data: data,
+						redis_response: redisResponse
+					};
+				}
+				return { redis_response: redisResponse };
+			}
+
+			let data = $?.data || {};
+
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			instance.status('Processing request...', 1000);
+
+			connect($, data, function(err, redisClient) { // Updated connect call
+				if (err) {
+					instance.status('Connection error', 3000);
+					$.data = { error: 'Connection error: ' + err.message || err };
+					$.send('output');
+					$.destroy();
+					return;
+				}
+
+				if (config.operation === 'INFO') {
+					instance.status('Executing INFO...', 1000);
+					instance.status('Executing INFO...', 1000);
+
+					redisClient.info().then(function(info) {
+						instance.status('INFO completed', 2000);
+						var result = parseRedisInfo(info);
+						$.data = result;
+						$.send('output');
+						$.destroy();
+					}).catch(function(err) {
+						instance.status('INFO failed', 3000);
+						$.data = { error: 'INFO command error: ' + err.message || err };
+						$.send('output');
+						$.destroy();
+					});
+				} else if (config.operation === 'KEYS') {
+
+					var command = config.keysCommand || 'SEARCH';
+
+					if (command === 'SEARCH') {
+						instance.status('Executing KEYS...', 1000);
+
+						var pattern = resolveValue(config.keyPattern || '*', data, instance, $); // Updated resolveValue call
+
+						redisClient.keys(pattern).then(function(keys) {
+							instance.status('KEYS completed (' + keys.length + ' keys)', 2000);
+
+							if (keys.length === 0) {
+								if (config.keysReturnArray) {
+									$.data = buildOutput(data, config, [] );
+								} else {
+									$.data = buildOutput(data, config, {} );
+								}
+								$.send('output');
+								$.destroy();
+								return;
+							}
+
+							// Get type and value for each key
+							var promises = [];
+							for (var i = 0; i < keys.length; i++) {
+								promises.push(getKeyValue(redisClient, keys[i]));
+							}
+
+							Promise.all(promises).then(function(results) {
+								// Apply deep JSON parsing to all results for KEYS:SEARCH
+								var parsedResults = results.map(function(result) {
+									return deepParseJSON(result);
+								});
+
+								if (config.keysReturnArray) {
+									// Return as array of objects
+									var resultArray = [];
+									for (var j = 0; j < keys.length; j++) {
+										if (config.keysOnlyValues) {
+											// Only values mode - push just the value
+											resultArray.push(parsedResults[j]);
+										} else {
+											// Standard mode - wrap in object with key
+											var obj = {};
+											obj[keys[j]] = parsedResults[j];
+											resultArray.push(obj);
+										}
+									}
+									$.data = buildOutput(data, config, resultArray );
+								} else {
+									// Return as object with key-value pairs
+									var result = {};
+									for (var j = 0; j < keys.length; j++) {
+										result[keys[j]] = parsedResults[j];
+									}
+									$.data = buildOutput(data, config, result );
+								}
+								$.send('output');
+								$.destroy();
+							}).catch(function(err) {
+								instance.status('Failed to get values', 3000);
+								$.data = { error: 'Failed to get key values: ' + (err.message || err) };
+								$.send('output');
+								$.destroy();
+							});
+
+						}).catch(function(err) {
+							instance.status('KEYS failed', 3000);
+							$.data = { error: 'KEYS command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+					} else if (command === 'DELETE') {
+						instance.status('Executing DELETE...', 1000);
+
+						var flushAll = config.keysFlushAll || false;
+
+						if (flushAll) {
+							// FLUSHDB - delete all keys in current database
+							redisClient.flushDb().then(function(result) {
+								instance.status('FLUSHDB completed', 2000);
+								$.data = { operation: 'FLUSHDB', database: config.database, result: result };
+								$.send('output');
+								$.destroy();
+							}).catch(function(err) {
+								instance.status('FLUSHDB failed', 3000);
+								$.data = { error: 'FLUSHDB command error: ' + (err.message || err) };
+								$.send('output');
+								$.destroy();
+							});
+						} else {
+							var keysInput = resolveValue(config.keysToDelete || '', data, instance, $); // Updated resolveValue call
+
+							if (!keysInput) {
+								$.data = { error: 'Key(s) is required' };
+								$.send('output');
+								$.destroy();
+								return;
+							}
+
+							// Parse keys (split by comma and trim)
+							var keysToDelete = keysInput.split(',').map(function(k) { return k.trim(); }).filter(function(k) { return k !== ''; });
+
+							if (keysToDelete.length === 0) {
+								$.data = { error: 'Key(s) is required' };
+								$.send('output');
+								$.destroy();
+								return;
+							}
+
+							// DEL key1 key2 key3...
+							redisClient.del(keysToDelete).then(function(result) {
+								instance.status('DEL completed', 2000);
+								$.data = { operation: 'DEL', keysDeleted: result, keys: keysToDelete };
+								$.send('output');
+								$.destroy();
+							}).catch(function(err) {
+								instance.status('DEL failed', 3000);
+								$.data = { error: 'DEL command error: ' + (err.message || err) };
+								$.send('output');
+								$.destroy();
+							});
+						}
+					}
+				} else if (config.operation === 'STRING') {
+					instance.status('Executing STRING...', 1000);
+
+					var command = config.stringCommand || 'SET';
+					var keysInput = resolveValue(config.stringKeys || '', data, instance, $); // Updated resolveValue call
+					var value = resolveValue(config.stringValue || '', data, instance, $); // Updated resolveValue call
+					var ttl = config.stringTTL || 0;
+
+					// Parse keys (split by space, comma, or mixed separators)
+          var keys = keysInput.split(/[ ,]+/).map(function(k) { return k.trim(); }).filter(function(k) { return k !== ''; });
+
+					if (keys.length === 0) {
+						$.data = { error: 'Key(s) is required' };
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					// Try to parse value as number
+					var parsedValue = value;
+					var numValue = parseFloat(value);
+					if (!isNaN(numValue) && value.trim() === numValue.toString()) {
+						parsedValue = numValue;
+					}
+
+					if (command === 'SET' || command === 'SET NX' || command === 'SET XX') {
+						var key = keys[0];
+						var setOptions = {};
+
+						if (command === 'SET NX') {
+							setOptions.NX = true;
+						} else if (command === 'SET XX') {
+							setOptions.XX = true;
+						}
+
+						if (ttl > 0) {
+							setOptions.EX = ttl;
+						}
+
+						redisClient.set(key, parsedValue, setOptions).then(function(result) {
+							instance.status('SET completed', 2000);
+							$.data = { result: result, key: key, value: parsedValue };
+							$.send('output');
+							$.destroy();
+						}).catch(function(err) {
+							instance.status('SET failed', 3000);
+							$.data = { error: 'SET command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+
+					} else if (command === 'GET') {
+						var key = keys[0];
+
+						redisClient.get(key).then(function(result) {
+							instance.status('GET completed', 2000);
+							$.data = { key: key, value: result };
+							$.send('output');
+							$.destroy();
+						}).catch(function(err) {
+							instance.status('GET failed', 3000);
+							$.data = { error: 'GET command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+
+					} else if (command === 'MGET') {
+						redisClient.mGet(keys).then(function(results) {
+							instance.status('MGET completed', 2000);
+							var result = {};
+							for (var i = 0; i < keys.length; i++)
+								result[keys[i]] = results[i];
+							$.data = { keys: keys, values: result };
+							$.send('output');
+							$.destroy();
+						}).catch(function(err) {
+							instance.status('MGET failed', 3000);
+							$.data = { error: 'MGET command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+					}
+
+				} else if (config.operation === 'LISTS') {
+					instance.status('Executing LISTS...', 1000);
+
+					var command = config.listCommand || 'LENGTH';
+					var listKey = resolveValue(config.listKey || '', data, instance, $); // Updated resolveValue call
+
+					if (!listKey) {
+						$.data = { error: 'List Key is required' };
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					if (command === 'LENGTH') {
+						redisClient.lLen(listKey).then(function(length) {
+							instance.status('LLEN completed', 2000);
+							$.data = buildOutput(data, config, { key: listKey, length: length } );
+							$.send('output');
+							$.destroy();
+						}).catch(function(err) {
+							instance.status('LLEN failed', 3000);
+							$.data = { error: 'LLEN command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+
+					} else if (command === 'RANGE') {
+						var from = config.listFrom || 0;
+						var to = config.listTo || -1;
+
+						redisClient.lRange(listKey, from, to).then(function(results) {
+							instance.status('LRANGE completed', 2000);
+							// Try to parse each result as JSON
+							var parsedResults = results.map(function(r) { return tryParseJSON(r); });
+							$.data = buildOutput(data, config, { key: listKey, from: from, to: to, values: parsedResults } );
+							$.send('output');
+							$.destroy();
+						}).catch(function(err) {
+							instance.status('LRANGE failed', 3000);
+							$.data = { error: 'LRANGE command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+
+					} else if (command === 'PUSH') {
+						var valuesInput = resolveValue(config.listValues || '', data, instance, $); // Updated resolveValue call
+						var position = config.listPosition ? 'Tail' : 'Head';
+
+						if (!valuesInput) {
+							$.data = { error: 'Value(s) is required' };
+							$.send('output');
+							$.destroy();
+							return;
+						}
+
+						// Parse values (split by comma and trim)
+						var values = valuesInput.split(',').map(function(v) { return v.trim(); }).filter(function(v) { return v !== ''; });
+
+						if (values.length === 0) {
+							$.data = { error: 'Value(s) is required' };
+							$.send('output');
+							$.destroy();
+							return;
+						}
+
+						var pushPromise = position === 'Head' ? redisClient.lPush(listKey, values) : redisClient.rPush(listKey, values);
+
+						pushPromise.then(function(result) {
+							instance.status((position === 'Head' ? 'LPUSH' : 'RPUSH') + ' completed', 2000);
+							$.data = buildOutput(data, config, { key: listKey, position: position, valuesAdded: result } );
+							$.send('output');
+							$.destroy();
+						}).catch(function(err) {
+							instance.status((position === 'Head' ? 'LPUSH' : 'RPUSH') + ' failed', 3000);
+							$.data = { error: (position === 'Head' ? 'LPUSH' : 'RPUSH') + ' command error: ' + (err.message || err) };
+							$.send('output');
+							$.destroy();
+						});
+
+					} else if (command === 'POP') {
+						var position = config.listPosition ? 'Tail' : 'Head';
+						var count = config.listCount || 1;
+
+						if (count === 1) {
+							var popPromise = position === 'Head' ? redisClient.lPop(listKey) : redisClient.rPop(listKey);
+
+							popPromise.then(function(result) {
+								instance.status((position === 'Head' ? 'LPOP' : 'RPOP') + ' completed', 2000);
+								// Try to parse result as JSON
+								var parsedResult = tryParseJSON(result);
+								$.data = buildOutput(data, config, { key: listKey, position: position, value: parsedResult } );
+								$.send('output');
+								$.destroy();
+							}).catch(function(err) {
+								instance.status((position === 'Head' ? 'LPOP' : 'RPOP') + ' failed', 3000);
+								$.data = { error: (position === 'Head' ? 'LPOP' : 'RPOP') + ' command error: ' + (err.message || err) };
+								$.send('output');
+								$.destroy();
+							});
+						} else {
+							// For multiple values, we need to pop them one by one
+							var promises = [];
+							for (var i = 0; i < count; i++) {
+								promises.push(position === 'Head' ? redisClient.lPop(listKey) : redisClient.rPop(listKey));
+							}
+
+							Promise.all(promises).then(function(results) {
+								instance.status((position === 'Head' ? 'LPOP' : 'RPOP') + ' completed', 2000);
+								// Filter out null values (in case list had fewer elements)
+								var filteredResults = results.filter(function(r) { return r !== null; });
+								// Try to parse each result as JSON
+								var parsedResults = filteredResults.map(function(r) { return tryParseJSON(r); });
+								$.data = buildOutput(data, config, { key: listKey, position: position, values: parsedResults } );
+								$.send('output');
+								$.destroy();
+							}).catch(function(err) {
+								instance.status((position === 'Head' ? 'LPOP' : 'RPOP') + ' failed', 3000);
+								$.data = { error: (position === 'Head' ? 'LPOP' : 'RPOP') + ' command error: ' + (err.message || err) };
+								$.send('output');
+								$.destroy();
+							});
+						}
+					}
+
+				} else if (config.operation === 'HASH') {
+					instance.status('Executing HASH...', 1000);
+
+					var command = config.hashCommand || 'GET';
+					var hashKey = resolveValue(config.hashKey || '', data, instance, $); // Updated resolveValue call
+					var fieldsInput = resolveValue(config.hashFields || '', data, instance, $); // Updated resolveValue call
+					var jsonSupport = config.hashJsonSupport || false;
+
+					if (!hashKey) {
+						$.data = { error: 'Hash Key is required' };
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					if (!fieldsInput) {
+						$.data = { error: 'Field(s) are required' };
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					if (command === 'GET') {
+						if (jsonSupport) {
+							// JSON mode - simple field names or * wildcard
+							var trimmedInput = fieldsInput.trim();
+
+							if (trimmedInput === '*') {
+								// Get all fields using HGETALL
+								redisClient.hGetAll(hashKey).then(function(result) {
+									instance.status('HGETALL completed', 2000);
+
+									// Try to parse each value as JSON
+									var parsedResult = {};
+									if (result && typeof result === 'object') {
+										var keys = Object.keys(result);
+										for (var i = 0; i < keys.length; i++) {
+											var key = keys[i];
+											parsedResult[key] = tryParseJSON(result[key]);
+										}
+									}
+
+									$.data = buildOutput(data, config, { key: hashKey, values: parsedResult } );
+									$.send('output');
+									$.destroy();
+								}).catch(function(err) {
+									instance.status('HGETALL failed', 3000);
+									$.data = { error: 'HGETALL command error: ' + (err.message || err) };
+									$.send('output');
+									$.destroy();
+								});
+							} else {
+								// Split by space or comma to get field names
+								var fields = trimmedInput.split(/[ ,]+/).filter(function(x) { return x; });
+
+								if (fields.length === 0) {
+									$.data = { error: 'No fields specified' };
+									$.send('output');
+									$.destroy();
+									return;
+								}
+
+								if (fields.length === 1) {
+									redisClient.hGet(hashKey, fields[0]).then(function(result) {
+										instance.status('HGET completed', 2000);
+										var parsedResult = tryParseJSON(result);
+										var resultObj = {};
+										resultObj[fields[0]] = parsedResult;
+										$.data = buildOutput(data, config, { key: hashKey, values: resultObj } );
+										$.send('output');
+										$.destroy();
+									}).catch(function(err) {
+										instance.status('HGET failed', 3000);
+										$.data = { error: 'HGET command error: ' + (err.message || err) };
+										$.send('output');
+										$.destroy();
+									});
+								} else {
+									redisClient.hmGet(hashKey, fields).then(function(results) {
+										instance.status('HMGET completed', 2000);
+										var resultObj = {};
+										for (var i = 0; i < fields.length; i++)
+											resultObj[fields[i]] = tryParseJSON(results[i]);
+										$.data = buildOutput(data, config, { key: hashKey, values: resultObj } );
+										$.send('output');
+										$.destroy();
+									}).catch(function(err) {
+										instance.status('HMGET failed', 3000);
+										$.data = { error: 'HMGET command error: ' + (err.message || err) };
+										$.send('output');
+										$.destroy();
+									});
+								}
+							}
+						} else {
+							// Original mode - split by space or comma
+							var fields = fieldsInput.split(/[ ,]+/).filter(x => x);
+
+							if (fields.length === 1) {
+								redisClient.hGet(hashKey, fields[0]).then(function(result) {
+									instance.status('HGET completed', 2000);
+									var resultObj = {};
+									resultObj[fields[0]] = tryParseJSON(result);
+									$.data = buildOutput(data, config, { key: hashKey, values: resultObj } );
+									$.send('output');
+									$.destroy();
+								}).catch(function(err) {
+									instance.status('HGET failed', 3000);
+									$.data = { error: 'HGET command error: ' + (err.message || err) };
+									$.send('output');
+									$.destroy();
+								});
+							} else {
+								redisClient.hmGet(hashKey, fields).then(function(results) {
+									instance.status('HMGET completed', 2000);
+									var resultObj = {};
+									for (var i = 0; i < fields.length; i++)
+										resultObj[fields[i]] = tryParseJSON(results[i]);
+									$.data = buildOutput(data, config, { key: hashKey, values: resultObj } );
+									$.send('output');
+									$.destroy();
+								}).catch(function(err) {
+									instance.status('HMGET failed', 3000);
+									$.data = { error: 'HMGET command error: ' + (err.message || err) };
+									$.send('output');
+									$.destroy();
+								});
+							}
+						}
+					} else if (command === 'SET') {
+						if (jsonSupport) {
+							// JSON mode - parse as JSON object with field-value pairs
+							try {
+								var dataObj = JSON.parse(fieldsInput);
+
+								// Validate that it's an object
+								if (typeof dataObj !== 'object' || Array.isArray(dataObj) || dataObj === null) {
+									$.data = { error: 'Invalid JSON format. Expected object with field-value pairs' };
+									$.send('output');
+									$.destroy();
+									return;
+								}
+
+								// Recursive function to flatten nested objects
+								var flattenObject = function(obj, prefix) {
+									var result = {};
+
+									for (var key in obj) {
+										if (Object.prototype.hasOwnProperty.call(obj, key)) {
+											var value = obj[key];
+											var fullKey = prefix ? prefix + ':' + key : key;
+
+											if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+												// Recursively flatten nested objects
+												var nested = flattenObject(value, fullKey);
+												for (var nestedKey in nested) {
+													if (Object.prototype.hasOwnProperty.call(nested, nestedKey)) {
+														result[nestedKey] = nested[nestedKey];
+													}
+												}
+											} else {
+												// Convert value to string for Redis storage
+												result[fullKey] = typeof value === 'string' ? value : JSON.stringify(value);
+											}
+										}
+									}
+
+									return result;
+								};
+
+								var flatData = flattenObject(dataObj, '');
+
+								// Use HSET with multiple field-value pairs
+								var args = [];
+								for (var field in flatData) {
+									if (Object.prototype.hasOwnProperty.call(flatData, field)) {
+										args.push(field);
+										args.push(flatData[field]);
+									}
+								}
+
+								redisClient.hSet(hashKey, args).then(function(result) {
+									instance.status('HSET completed', 2000);
+									$.data = { key: hashKey, fields: dataObj, result: result };
+									$.send('output');
+									$.destroy();
+								}).catch(function(err) {
+									instance.status('HSET failed', 3000);
+									$.data = { error: 'HSET command error: ' + (err.message || err) };
+									$.send('output');
+									$.destroy();
+								});
+
+								var ttl = config.hashTTL || 0;
+								if (ttl > 0) {
+									redisClient.expire(hashKey, ttl).then(function() {
+											instance.status('TTL set (' + ttl + ' sec)', 1500);
+									}).catch(function(err) {
+											instance.status('Failed to set TTL: ' + err.message, 3000);
+									});
+								}
+
+							} catch (e) {
+								$.data = { error: 'Invalid JSON format: ' + e.message };
+								$.send('output');
+								$.destroy();
+								return;
+							}
+						} else {
+							// Original mode - space or comma separated
+							var parts = fieldsInput.split(/[ ,]+/).filter(x => x);
+
+							if (parts.length < 2 || parts.length % 2 !== 0) {
+								$.data = { error: 'Field(s) and Value(s) must come in pairs' };
+								$.send('output');
+								$.destroy();
+								return;
+							}
+
+							var args = [];
+							for (var i = 0; i < parts.length; i++) {
+								args.push(parts[i]);
+							}
+
+							redisClient.hSet(hashKey, args).then(function(result) {
+								instance.status('HSET completed', 2000);
+								$.data = { key: hashKey, fields: parts, result: result };
+								$.send('output');
+								$.destroy();
+							}).catch(function(err) {
+								instance.status('HSET failed', 3000);
+								$.data = { error: 'HSET command error: ' + (err.message || err) };
+								$.send('output');
+								$.destroy();
+							});
+							var ttl = config.hashTTL || 0;
+							if (ttl > 0) {
+								redisClient.expire(hashKey, ttl).then(function() {
+										instance.status('TTL set (' + ttl + ' sec)', 1500);
+								}).catch(function(err) {
+										instance.status('Failed to set TTL: ' + err.message, 3000);
+								});
+							}
+						}
+					} else {
+						instance.status('Unknown HASH command', 3000);
+						$.data = { error: 'Unsupported HASH command: ' + command };
+						$.send('output');
+						$.destroy();
+					}
+				} else {
+					instance.status('Operation not implemented', 3000);
+					$.data = { error: 'Operation not implemented yet' };
+					$.send('output');
+					$.destroy();
+				}
+			});
+		};
+
+		var parseRedisInfo = function(infoStr) {
+			var lines = infoStr.split('\r\n');
+			var result = {};
+			var currentSection = null;
+			for (var i = 0; i < lines.length; i++) {
+				var line = lines[i].trim();
+				if (!line || line.startsWith('#')) {
+					continue;
+				}
+				var parts = line.split(':');
+				if (parts.length === 2) {
+					var key = parts[0].trim();
+					var value = parts[1].trim();
+					if (value.indexOf(',') !== -1 && value.indexOf('=') !== -1) {
+						var obj = {};
+						var pairs = value.split(',');
+						for (var j = 0; j < pairs.length; j++) {
+							var pair = pairs[j].split('=');
+							if (pair.length === 2) {
+								obj[pair[0].trim()] = parseValue(pair[1].trim());
+							}
+						}
+						result[key] = obj;
+					} else {
+						result[key] = parseValue(value);
+					}
+				}
+			}
+			return [result];
+		};
+
+		var parseValue = function(val) {
+			if (val === '') return '';
+			var num = parseFloat(val);
+			if (!isNaN(num) && val === num.toString()) {
+				return num;
+			}
+			if (val === 'true') return true;
+			if (val === 'false') return false;
+			return val;
+		};
+
+		var tryParseJSON = function(value) {
+			if (typeof value !== 'string') {
+				return value;
+			}
+			var trimmed = value.trim();
+			if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+				try {
+					return JSON.parse(trimmed);
+				} catch (e) {
+					// If parsing fails, return original value
+					return value;
+				}
+			}
+			return value;
+		};
+
+		instance.close = function() {
+			if (client && isConnected) {
+				client.quit().catch(function(err) {
+					// Ignore errors on close
+				});
+				isConnected = false;
+				client = null;
+			}
+		};
+
+		instance.configure = function() {
+			if (client && isConnected) {
+				client.quit().catch(function(err) {
+					// Ignore errors
+				});
+				isConnected = false;
+				client = null;
+			}
+		};
+
+		instance.configure();
+	};
+</script>
+
+<settings>
+
+	<script>
+		// Operation options
+		var operations = ['INFO', 'KEYS', 'STRING', 'LISTS', 'HASH'];
+
+		// Keys command options
+		var keysCommands = ['SEARCH', 'DELETE'];
+
+		// String command options
+		var stringCommands = ['SET', 'SET NX', 'SET XX', 'GET', 'MGET'];
+
+		// List command options
+		var listCommands = ['LENGTH', 'RANGE', 'PUSH', 'POP'];
+
+		// Hash command options
+		var hashCommands = ['GET', 'SET'];
+	</script>
+
+	<div class="padding">
+
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Instance settings</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6 m">
+			 <ui-component name="input" path="?.host" config="required:true;placeholder:redis-host or {{ $globalVAR.host }};total:1">Host:</ui-component>
+			</div>
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.port" config="required:true;placeholder:6379 or {{ $globalVAR.port }};total:1">Port:</ui-component>
+			 </div>
+			<div class="col-md-3 m">
+			 <ui-component name="input" path="?.database" config="type:number;min:0;increment:1;format:">Database Number</ui-component>
+			</div>
+		 </div>
+
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.password" config="type:password;placeholder:password or {{ $globalVAR.password }};total:1">Password:</ui-component>
+			 </div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Operations settings</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.operation" config="required:true;dirsource:operations">Operation Type</ui-component>
+			</div>
+			<div data-bind="?.operation__show:value === 'KEYS'" class="hidden col-md-6 m">
+				<ui-component name="input" path="?.keysCommand" config="required:true;dirsource:keysCommands">Command</ui-component>
+			</div>
+			<div data-bind="?.operation__show:value === 'STRING'" class="hidden col-md-6 m">
+				<ui-component name="input" path="?.stringCommand" config="required:true;dirsource:stringCommands">Command</ui-component>
+			</div>
+			<div data-bind="?.operation__show:value === 'LISTS'" class="hidden col-md-6 m">
+				<ui-component name="input" path="?.listCommand" config="required:true;dirsource:listCommands">Command</ui-component>
+			</div>
+			<div data-bind="?.operation__show:value === 'HASH'" class="hidden col-md-6 m">
+				<ui-component name="input" path="?.hashCommand" config="required:true;dirsource:hashCommands">Command</ui-component>
+			</div>
+		</div>
+
+		<div data-bind="?.operation__show:value === 'KEYS'" class="hidden">
+			<div data-bind="?.keysCommand__show:value === 'SEARCH'" class="hidden">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.keyPattern" config="required:true;placeholder:* or jambonz:* or {{ $data.pattern }}">Key search pattern</ui-component>
+					</div>
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.keysReturnArray" config="type:checkbox">Return as array of objects</ui-component>
+					</div>
+					<div data-bind="?.keysReturnArray__show" class="hidden col-md-3 m">
+						<ui-component name="input" path="?.keysOnlyValues" config="type:checkbox">Only values</ui-component>
+					</div>
+				</div>
+			</div>
+
+			<div data-bind="?.keysCommand__show:value === 'DELETE'" class="hidden">
+				<div data-bind="?.keysFlushAll__hide" class="block">
+					<div class="row">
+						<div class="col-md-6 m">
+							<ui-component name="input" path="?.keysToDelete" config="placeholder:key1, key2 or {{ $data.keyName }}">Key(s)</ui-component>
+						</div>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-12 m">
+            <div style="display: flex; align-items: center;">
+              <ui-component name="input" path="?.keysFlushAll" config="type:checkbox">Flush all database</ui-component>
+              <span style="color: #909090; margin-left: 5px; margin-top: -5px; font-size: 13px;">(delete all keys in the current database)</span>
+            </div>
+					</div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Operation Help Notes</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="help" style="margin-left: 15px; margin-right: 15px; font-family: Consolas, monospace; font-size: smaller;">
+				<b>Useful links:</b><br>
+				- https://redis.io/docs/latest/commands/keys<br>
+				- https://redis.io/docs/latest/commands/del<br>
+				- https://redis.io/docs/latest/commands/flushdb<br>
+				<br>
+				<div style="margin-top: 10px;"><b>KEYS search examples:</b></div>
+				<pre>+-------------------------+
+|  KEYS search examples   |
++-------------------------+
+|  *                      |
+|  jambonz:*              |
+|  jambonz*sip*           |
+|  {{ $data.keyName }}*   |
++-------------------------+</pre>
+			</div>
+		</div>
+
+		<div data-bind="?.operation__show:value === 'STRING'" class="hidden">
+
+      <!-- Key(s) field for non-MGET commands -->
+      <div data-bind="?.stringCommand__hide:value === 'MGET'" class="block">
+        <div class="row">
+          <div class="col-md-6 m">
+            <ui-component name="input" path="?.stringKeys" config="required:true;placeholder:key or {{ $data.keyName }}">Key(s)</ui-component>
+          </div>
+          <div data-bind="?.stringCommand__show:value === 'SET' || value === 'SET NX' || value === 'SET XX'" class="hidden col-md-6 m">
+            <ui-component name="input" path="?.stringValue" config="placeholder:value or {{ $data.value }}">Value</ui-component>
+          </div>
+        </div>
+      </div>
+
+      <!-- Key(s) field specifically for MGET -->
+      <div data-bind="?.stringCommand__show:value === 'MGET'" class="hidden">
+        <div class="row">
+          <div class="col-md-6 m">
+            <ui-component name="input" path="?.stringKeys" config="required:true;placeholder:key1 key2 {{ $data.keyName }}">Key(s)</ui-component>
+          </div>
+        </div>
+      </div>
+
+			<div data-bind="?.stringCommand__show:value === 'SET' || value === 'SET NX' || value === 'SET XX'" class="hidden">
+				<div class="row">
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.stringTTL" config="type:number;min:0;increment:1;format:">TTL (sec)</ui-component>
+					</div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Operation Help Notes</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="help" style="margin-left: 15px; margin-right: 15px; font-family: Consolas, monospace; font-size: smaller;">
+				<b>Useful links:</b><br>
+				- https://redis.io/docs/latest/commands/set<br>
+				- https://redis.io/docs/latest/commands/get<br>
+				- https://redis.io/docs/latest/commands/mget<br>
+			</div>
+		</div>
+
+		<div data-bind="?.operation__show:value === 'LISTS'" class="hidden">
+			<div data-bind="?.listCommand__hide:value === 'PUSH' || value === 'POP' || value === 'RANGE'" class="block">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.listKey" config="required:true;placeholder:listKey or {{ $data.listKeyName }}">List Key</ui-component>
+					</div>
+				</div>
+			</div>
+
+			<div data-bind="?.listCommand__show:value === 'RANGE'" class="hidden">
+        <div class="row">
+          <div class="col-md-6 m">
+            <ui-component name="input" path="?.listKey" config="required:true;placeholder:listKey or {{ $data.listKeyName }}">List Key</ui-component>
+          </div>
+          <div class="col-md-3 m">
+            <ui-component name="input" path="?.listFrom" config="type:number;increment:1;format:">from</ui-component>
+          </div>
+          <div class="col-md-3 m">
+            <ui-component name="input" path="?.listTo" config="type:number;increment:1;format:">to</ui-component>
+          </div>
+        </div>
+			</div>
+
+			<div data-bind="?.listCommand__show:value === 'PUSH'" class="hidden">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.listKey" config="required:true;placeholder:listKey or {{ $data.listKeyName }}">List Key</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.listValues" config="required:true;placeholder:value1 value2 {{ $data.item }} OR JSON object/array">Value(s)</ui-component>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-12 m">
+						<ui-component name="input" path="?.listPosition" config="type:checkbox">Tail mode</ui-component>
+						<span class="help" style="display: inline;">Enable adding values to the list tail (default is head)</span>
+					</div>
+				</div>
+			</div>
+
+			<div data-bind="?.listCommand__show:value === 'POP'" class="hidden">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.listKey" config="required:true;placeholder:listKey or {{ $data.listKeyName }}">List Key</ui-component>
+					</div>
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.listCount" config="type:number;min:1;increment:1;format:">Values to return</ui-component>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-12 m">
+						<ui-component name="input" path="?.listPosition" config="type:checkbox">Tail mode</ui-component>
+						<span class="help" style="display: inline;">Enable returning values from the list tail (default is head)</span>
+					</div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Operation Help Notes</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="help" style="margin-left: 15px; margin-right: 15px; font-family: Consolas, monospace; font-size: smaller;">
+				<b>Useful links:</b><br>
+				- https://redis.io/docs/latest/develop/data-types/lists<br>
+				- https://redis.io/docs/latest/commands/llen<br>
+				- https://redis.io/docs/latest/commands/lrange<br>
+				- https://redis.io/docs/latest/commands/lpush<br>
+				- https://redis.io/docs/latest/commands/rpush<br>
+				- https://redis.io/docs/latest/commands/lpop<br>
+				- https://redis.io/docs/latest/commands/rpop<br>
+				<br>
+				<div style="margin-top: 10px;"><b>Additional description:</b></div>
+				<pre>+-----------+-------------------------------------------------------------------------------------------------+
+|  Command  |  Description                                                                                    |
++-----------+-------------------------------------------------------------------------------------------------+
+|  LENGTH   |  Returns the length of the list stored at key.                                                  |
+|           |  If key does not exist, it is interpreted as an empty list and 0 is returned.                   |
+|           |  An error is returned when the value stored at key is not a list.                               |
++-----------+-------------------------------------------------------------------------------------------------+
+|  RANGE    |  Returns the specified elements of the list stored at key.                                      |
+|           |  The offsets start and stop are zero-based indexes, with 0 being the first element of the list. |
+|           |  The offsets can also be negative numbers indicating offsets starting at the end of the list.   |
+|           |  For example, -1 is the last element of the list, -2 the penultimate, and so on.                |
++-----------+-------------------------------------------------------------------------------------------------+
+|  PUSH     |  Insert value or values at the head/tail of the list stored at key.                             |
+|           |  If key does not exist, it is created as empty list before performing the push operations.      |
++-----------+-------------------------------------------------------------------------------------------------+
+|  POP      |  Returns the first/last element and also removes it from the list stored at key .               |
+|           |  When provided with the count argument, the reply will consist the count of elements.           |
++-----------+-------------------------------------------------------------------------------------------------+</pre>
+			</div>
+		</div>
+
+		<div data-bind="?.operation__show:value === 'HASH'" class="hidden">
+			<div data-bind="?.hashCommand__show:value === 'GET'" class="hidden">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.hashKey" config="required:true;placeholder:hashKey or {{ $data.hashKeyname }}">Hash Key</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.hashFields" config="required:true;placeholder:* or field1 field2 {{ $data.fieldName }}">Key Field(s)</ui-component>
+						<div style="margin-top: 8px;">
+							<ui-component name="input" path="?.hashJsonSupport" config="type:checkbox">Enable JSON support</ui-component>
+							<span class="help" style="display: inline;">Use * to get all hash key fields.</span>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div data-bind="?.hashCommand__show:value === 'SET'" class="hidden">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.hashKey" config="required:true;placeholder:hashKey or {{ $data.hashKeyname }}">Hash Key</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.hashFields" config="required:true;placeholder:field1 value1 field2 {{ $data.valueKey }} or JSON object">Key Field(s) and Value(s)</ui-component>
+						<div style="margin-top: 8px;">
+							<ui-component name="input" path="?.hashJsonSupport" config="type:checkbox">Enable JSON support</ui-component>
+							<span class="help" style="display: inline;">Treat input as JSON object (e.g., {"field1": "value1", "field2": 123})</span>
+						</div>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.hashTTL" config="type:number;min:0;increment:1;format:">TTL (sec)</ui-component>
+					</div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Operation Help Notes</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="help" style="margin-left: 15px; margin-right: 15px; font-family: Consolas, monospace; font-size: smaller;">
+				<b>Useful links:</b><br>
+				- https://redis.io/docs/latest/develop/data-types/hashes<br>
+				- https://redis.io/docs/latest/commands/expire<br>
+				- https://redis.io/docs/latest/commands/hget<br>
+				- https://redis.io/docs/latest/commands/hmget<br>
+				- https://redis.io/docs/latest/commands/hgetall<br>
+				- https://redis.io/docs/latest/commands/hset<br>
+				<br>
+				<div style="margin-top: 10px;"><b>JSON support modes:</b></div>
+				<pre>+------------------------------------------+---------------------------------------+
+|  Input Example                           |  Redis Storage                        |
++------------------------------------------+---------------------------------------+
+| {"field1": "value1",                     | field1: "value1"                      |
+|  "field2": 789,                          | field2: "789"                         |
+|  "field3": true}                         | field3: "true"                        |
+|                                          |                                       |
+| {"user": {"name": "John",                | user:name: "John"                     |
+|           "age": 30}}                    | user:age: "30"                        |
++------------------------------------------+---------------------------------------+</pre>
+			</div>
+		</div>
+
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #7a0200 !important; min-width: 150px; }
+	.CLASS header { background-color: #7a0200; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+	.CLASS footer { padding: 10px; font-size: 12px; }
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Input field styling - all text, password, and number fields */
+	#flow_settings input[type="text"],
+	#flow_settings input[type="password"],
+	#flow_settings input[type="number"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[type="text"],
+	.ui-dark #flow_settings input[type="password"],
+	.ui-dark #flow_settings input[type="number"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Help section pre styling */
+	.help pre {
+		font-family: Consolas, monospace;
+		font-size: 11px;
+		line-height: 1.4;
+		margin: 5px 0;
+		padding: 5px;
+		background-color: #f5f5f5;
+		border: 1px solid #e0e0e0;
+		border-radius: 3px;
+	}
+
+	.ui-dark .help pre {
+		background-color: #2a2a2a;
+		border-color: #404040;
+		color: #ccc;
+	}
+
+	.help a {
+		color: #4285f4;
+		text-decoration: none;
+	}
+
+	.help a:hover {
+		text-decoration: underline;
+	}
+
+	.ui-dark .help a {
+		color: #6fa8dc;
+	}
+
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+
+  [data-bind*="keysCommand__show:value === 'SEARCH'"] .row > .col-md-3.m {
+    display: flex;
+    align-items: flex-start;
+    margin-top: 20px;
+  }
+
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+	<footer>
+		<ui-bind path="CONFIG" config="template" class="block">
+			<script type="text/html">
+				<div><b>Database:</b> {{ value.database }}</div>
+				<div><b>Operation:</b> {{ value.operation }}</div>
+				{{ if value.operation === 'KEYS' }}
+				<div><b>Command:</b> {{ value.keysCommand }}</div>
+				{{ fi }}
+				{{ if value.operation === 'STRING' }}
+				<div><b>Command:</b> {{ value.stringCommand }}</div>
+				{{ fi }}
+				{{ if value.operation === 'LISTS' }}
+				<div><b>Command:</b> {{ value.listCommand }}</div>
+				{{ fi }}
+				{{ if value.operation === 'HASH' }}
+				<div><b>Command:</b> {{ value.hashCommand }}</div>
+				{{ fi }}
+			</script>
+		</ui-bind>
+	</footer>
+</body>
+
+<readme>
+# Redis
+This component provides integration with Redis database instances, supporting various operations for data storage and retrieval.
+
+
+## Inputs and Outputs
+- **Input**: Triggers the Redis operation (accepts any data)
+- **Output**: Returns the operation result wrapped in `redis_response` object (or error object if operation fails)
+
+
+## Behavior Notes
+- Component requires the `redis` npm package
+- Component is triggered by any input request
+- Establishes connection to Redis instance with configured settings
+- Returns the operation result wrapped in `redis_response` object
+- Automatically handles connection management and error handling
+- Template expressions are resolved before executing Redis commands
+- Invalid template expressions return `"<bad expression>"`
+- Connection is reused across multiple operations
+
+
+### Templates supported syntax:
+- **Static value**: `mykey` → outputs `"mykey"`
+- **Dynamic path**: `{{ $data.keyName }}` → reads from `$.data.keyName`
+- **Nested path**: `{{ $data.nested.value }}` → reads from `$.data.nested.value`
+- **Array path**: `{{ $data.items[0].name }}` → reads from `$.data.items[0].name`
+- **Object/Array**: `{{ $data.body }}` → automatically converted to JSON string
+
+
+### Templates Math Operations:
+- `{{ $data.value + 5 }}` → addition
+- `{{ $data.value - 3 }}` → subtraction
+- `{{ $data.value * 2 }}` → multiplication
+- `{{ $data.value / 2 }}` → division
+
+
+### Templates Text Concatenation:
+- `{{ $data.prefix }}_key` → `"value_key"`
+- `prefix_{{ $data.value }}_suffix` → `"prefix_value_suffix"`
+
+
+### Templates Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $data.nonexistent }}` → path doesn't exist
+- `{{ $data.text + 5 }}` → cannot add number to string
+- `{{ $data.nested.invalid }}` → invalid nested path
+
+</readme>

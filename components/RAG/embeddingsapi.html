@@ -1,0 +1,166 @@
+<script total>
+	exports.id = 'embeddingsapi';
+	exports.name = 'Olama Embeddings';
+	exports.icon = 'ti ti-brain';
+	exports.author = 'Auto-generated';
+	exports.version = '1.0.0';
+	exports.group = 'AI / Embeddings';
+	exports.color = '#8E43E7';
+
+	exports.inputs = [{ id: 'input', name: 'Text' }];
+	exports.outputs = [
+		{ id: 'output', name: 'Result' },
+		{ id: 'error', name: 'Error' }
+	];
+
+	exports.config = {
+		instance: '',
+		model: 'embeddinggemma:300m',
+		dimensions: 768,
+		batchsize: 128,
+		contextwindow: 8192,
+		useinput: true,
+		manualtext: ''
+	};
+
+	
+	function normalizeInstanceAddress(address) {
+		var base = (address || '').trim().replace(/^@+/, '');
+		if (!base)
+			return '';
+		if (!/^https?:\/\//i.test(base))
+			base = 'http://' + base;
+		return base.replace(/\/$/, '');
+	}
+	
+	exports.make = function(instance, config) {
+	
+		function postEmbed(text, next) {
+			var base = normalizeInstanceAddress(config.instance);
+			if (!base)
+				return next(new Error('Instance is not configured'));
+	
+			var url = base + '/api/embed';
+			var body = {
+				model: config.model,
+				dimensions: +config.dimensions,
+				input: text,
+				options: {
+					num_batch: +config.batchsize,
+					context_window: +config.contextwindow
+				}
+			};
+	
+			RESTBuilder.POST(url)
+				.header('Content-Type', 'application/json')
+				.json(body)
+				.timeout(20000)
+				.exec(function(err, response, output) {
+					next(err, response, output);
+				});
+		}
+	
+		instance.configure = function() {
+			instance.inputs = [{ id: 'input', name: 'Text' }];
+			instance.save();
+		};
+
+		instance.message = function($) {
+			var text;
+			if (config.useinput) {
+				text = $.data;
+				if (text == null || text === '') {
+					var emsg1 = instance.newmessage({ error: 'No input text', status: 0, response: null });
+					emsg1.send('error');
+					instance.error('No input text');
+					$.destroy();
+					return;
+				}
+			} else {
+				text = config.manualtext || '';
+				if (!text) {
+					var emsg2 = instance.newmessage({ error: 'Manual text is empty', status: 0, response: null });
+					emsg2.send('error');
+					instance.error('Manual text is empty');
+					$.destroy();
+					return;
+				}
+			}
+	
+			postEmbed(text, function(err, response, output) {
+				if (err || (output && output.status && output.status !== 200)) {
+					var status = output && output.status ? output.status : 0;
+					var payload = { error: err ? (err.message || String(err)) : 'HTTP ' + status, status: status, response: response };
+					var emsg = instance.newmessage(payload);
+					emsg.send('error');
+					instance.error(payload.error);
+					$.destroy();
+					return;
+				}
+				var msg = instance.newmessage(response);
+				msg.send('output');
+				$.destroy();
+			});
+		};
+	
+		instance.configure();
+	};
+	</script>
+	
+	<readme>
+		This component calls an Olama Embeddings API endpoint to generate embeddings for provided text.
+	</readme>
+	
+	<settings>
+		<div class="CLASS-settings">
+			<div class="padding">
+				<ui-component name="input" path="?.instance" config="required:1;innerlabel:1;placeholder:192.168.125.12:33904" class="m">Instance</ui-component>
+				<ui-component name="dropdown" path="?.model" config="items:embeddinggemma\:300m|embeddinggemma\:300m,mxbai-embed-large\:335m|mxbai-embed-large\:335m,nomic-embed-text\:v1.5|nomic-embed-text\:v1.5;search:0" class="m">Model</ui-component>
+				<ui-component name="dropdown" path="?.dimensions" config="items:32|32,64|64,128|128,256|256,512|512,768|768,1024|1024,1536|1536,2048|2048,4096|4096;search:0" class="m">Dimensions</ui-component>
+				<div class="grid-2">
+					<ui-component name="input" path="?.batchsize" config="type:number;required:1;min:1;step:1;innerlabel:1;default:128" class="m">Batch size</ui-component>
+					<ui-component name="input" path="?.contextwindow" config="type:number;required:1;min:1;step:1;innerlabel:1;default:8192" class="m">Context window</ui-component>
+				</div>
+			<ui-component name="input" path="?.useinput" config="type:checkbox" class="m">Use text from input</ui-component>
+			<div id="emb-manualtext-wrap" class="m" data-bind="?.useinput__invisible:value">
+				<ui-component name="input" path="?.manualtext" config="type:textarea;innerlabel:1;placeholder:Enter text (used when not using input)" class="m0">Manual text</ui-component>
+			</div>
+			</div>
+		</div>
+
+	<script>
+		TOUCH(function(exports){
+			exports.settings = function(){
+				function redraw(v){
+					var el = document.getElementById('emb-manualtext-wrap');
+					if (!el) return;
+					el.style.display = v ? 'none' : '';
+				}
+				WATCH('?.useinput', function(v){
+					if (v)
+						SET('?.manualtext', '');
+					redraw(v);
+				});
+				setTimeout(function(){ redraw(GET('?.useinput')); }, 50);
+			};
+		});
+	</script>
+	</settings>
+	
+	<style>
+		.CLASS-settings .m { margin-bottom: 12px; }
+		.CLASS footer { height: auto; line-height: 20px; padding: 0 10px; font-size: 12px; }
+		.CLASS header div { border-radius: var(--radius); padding: 3px; background-color: #8E43E7; color: #fff; }
+		.CLASS header div i { background-color: rgba(0,0,0,0.15); }
+		.ui-dark .CLASS header div i { background-color: rgba(255,255,255,0.2); }
+	</style>
+	
+	<body>
+		<header>
+			<i class="ICON"></i>NAME
+		</header>
+		<footer>
+			Model: <ui-bind path="CONFIG" config="text:value?value.model:''" class="b"></ui-bind>
+			Dimension: <ui-bind path="CONFIG" config="text:value?value.dimensions:''" class="b"></ui-bind>
+		</footer>
+	</body>

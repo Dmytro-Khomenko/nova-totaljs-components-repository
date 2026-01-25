@@ -1,0 +1,792 @@
+<script total>
+
+	exports.id = 'rest_module';
+	exports.name = 'REST module';
+	exports.group = 'Common';
+	exports.icon = 'ti ti-globe';
+	exports.author = 'Total.js';
+	exports.version = '1.3.3';
+	exports.config = {
+		forwardInputData: false,
+		forwardResponse: false,
+		method: 'GET',
+		url: '',
+		queryParams: {},
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		body: '',
+		responseStatusCode: false,
+		responseHeaders: false,
+		responseBody: true,
+		timeout: 10000,
+		limit: 512000,
+		retryAttempts: 0,
+		ignoreSSL: false,
+		debugRequests: false,
+		debugResponses: false
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'error', name: 'Error' }];
+
+	exports.make = function(instance, config) {
+
+		function buildOutput(data, config, response, statusCode, headers) {
+			var restResponse = {};
+
+			// Build current response object based on configuration
+			if (config.responseStatusCode) {
+				restResponse.status = statusCode;
+			}
+			if (config.responseHeaders) {
+				restResponse.headers = headers;
+			}
+			if (config.responseBody) {
+				restResponse.body = response;
+			}
+
+			if (config.forwardInputData) {
+				var output = {};
+
+				// Extract or determine forwarded_data
+				if (data.forwarded_data !== undefined) {
+					// Input already has forwarded_data, use it as is
+					output.forwarded_data = data.forwarded_data;
+				} else {
+					// No forwarded_data in input, create it from input data
+					// Exclude rest_response if it exists
+					var forwardData = {};
+					for (var key in data) {
+						if (key !== 'rest_response' && data.hasOwnProperty(key)) {
+							forwardData[key] = data[key];
+						}
+					}
+					output.forwarded_data = forwardData;
+				}
+
+				// Handle rest_response
+				if (config.forwardResponse) {
+					// Combine responses into array
+					var responses = [];
+
+					if (data.rest_response !== undefined) {
+						if (Array.isArray(data.rest_response)) {
+							// Already an array, clone and add all items
+							responses = data.rest_response.slice();
+						} else {
+							// Single response, add it
+							responses.push(data.rest_response);
+						}
+					}
+
+					// Add current response
+					responses.push(restResponse);
+					output.rest_response = responses;
+				} else {
+					// Only use current response
+					output.rest_response = restResponse;
+				}
+
+				return output;
+			}
+
+			// Forward disabled, just return current response
+			return { rest_response: restResponse };
+		}
+
+		var resolvePathOrValue = function(expr, data, instance, $) {
+			expr = expr.trim();
+
+			// Handle $FLOW_VARS for flow variables
+			if (expr.startsWith('$FLOW_VARS.')) {
+				var path = expr.substring(11); // Remove '$FLOW_VARS.'
+				// Access flow variables from instance.main.variables
+				var value = instance.main.variables ? instance.main.variables[path] : undefined;
+				if (value === undefined && instance.main.variables2) {
+					// Fallback to variables2 if not found in variables
+					value = instance.main.variables2[path];
+				}
+				return value !== undefined ? value : null;
+			}
+
+			// Handle $data for message data using Total.js built-in U.get()
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+
+			return null;
+		};
+
+		var resolveValue = function(text, data, instance, $) {
+			if (!text || typeof text !== 'string')
+				return text;
+
+			// Find all template expressions
+			var result = text.replace(/\{\{\s*(.*?)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				// Check for math operations
+				var operators = ['+', '-', '*', '/'];
+				var foundOperator = false;
+
+				for (var i = 0; i < operators.length; i++) {
+					var op = operators[i];
+					if (expression.indexOf(op) !== -1) {
+						foundOperator = true;
+						var parts = expression.split(op).map(function(p) { return p.trim(); });
+						if (parts.length === 2) {
+							var left = resolvePathOrValue(parts[0], data, instance, $);
+							var right = resolvePathOrValue(parts[1], data, instance, $);
+
+							// If left is null/undefined, try parsing as number
+							if (left === null) {
+								left = parseFloat(parts[0]);
+								if (isNaN(left))
+									return '<bad expression>';
+							}
+							// If right is null/undefined, try parsing as number
+							if (right === null) {
+								right = parseFloat(parts[1]);
+								if (isNaN(right))
+									return '<bad expression>';
+							}
+
+							var leftNum = typeof left === 'number' ? left : parseFloat(left);
+							var rightNum = typeof right === 'number' ? right : parseFloat(right);
+
+							if (isNaN(leftNum) || isNaN(rightNum))
+								return '<bad expression>';
+
+							var result = op === '+' ? leftNum + rightNum :
+								op === '-' ? leftNum - rightNum :
+									op === '*' ? leftNum * rightNum :
+										rightNum !== 0 ? leftNum / rightNum : 0;
+
+							return result;
+						}
+						break;
+					}
+				}
+
+				// If it was a math operation but failed to parse, return error
+				if (foundOperator) {
+					return '<bad expression>';
+				}
+
+				// Not a math operation, resolve as path
+				var resolved = resolvePathOrValue(expression, data, instance, $);
+
+				if (resolved === null) {
+					return '<bad expression>';
+				}
+
+				// If resolved value is an object or array, stringify it for JSON insertion
+				if (resolved !== expression) {
+					if (typeof resolved === 'object' && resolved !== null) {
+						return JSON.stringify(resolved);
+					}
+					return resolved;
+				}
+
+				return '<bad expression>';
+			});
+
+			return result;
+		};
+
+		instance.message = function($) {
+
+			let data = $?.data || {};
+
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			// Ensure default values for timeout, limit, and retryAttempts
+			if (config.timeout === undefined || config.timeout === null)
+				config.timeout = 10000;
+			if (config.limit === undefined || config.limit === null)
+				config.limit = 512000;
+			if (config.retryAttempts === undefined || config.retryAttempts === null)
+				config.retryAttempts = 0;
+
+			if (!config.url) {
+				$.data = 'URL is required';
+				$.send('error');
+				$.destroy();
+				return;
+			}
+
+			var resolvedUrl = resolveValue(config.url || '', data, instance, $);
+
+			// Add query parameters if specified
+			if (config.queryParams && typeof config.queryParams === 'object' && Object.keys(config.queryParams).length > 0) {
+				var queryParts = [];
+				for (var key in config.queryParams) {
+					if (config.queryParams.hasOwnProperty(key) && config.queryParams[key]) {
+						var resolvedKey = resolveValue(key, data, instance, $);
+						var resolvedValue = resolveValue(config.queryParams[key], data, instance, $);
+						queryParts.push(encodeURIComponent(resolvedKey) + '=' + encodeURIComponent(resolvedValue));
+					}
+				}
+
+				if (queryParts.length > 0) {
+					var separator = resolvedUrl.indexOf('?') !== -1 ? '&' : '?';
+					resolvedUrl += separator + queryParts.join('&');
+				}
+			}
+
+			var opt = {};
+			opt.url = resolvedUrl;
+			opt.method = config.method || 'GET';
+
+			if (config.headers && typeof config.headers === 'object' && Object.keys(config.headers).length > 0) {
+				opt.headers = {};
+				for (var key in config.headers) {
+					if (config.headers.hasOwnProperty(key) && config.headers[key]) {
+						var resolvedKey = resolveValue(key, data, instance, $);
+						var resolvedValue = resolveValue(config.headers[key], data, instance, $);
+						opt.headers[resolvedKey] = resolvedValue;
+					}
+				}
+			}
+
+			if (config.body && config.body.trim() !== '' && opt.method !== 'GET' && opt.method !== 'HEAD') {
+				var resolvedBody = resolveValue(config.body, data, instance, $);
+				opt.body = resolvedBody;
+
+				// Set Content-Type if not already set and body looks like JSON
+				if (!opt.headers || !opt.headers['Content-Type']) {
+					try {
+						JSON.parse(resolvedBody);
+						if (!opt.headers)
+							opt.headers = {};
+						opt.headers['Content-Type'] = 'application/json';
+					} catch (e) {
+						// Not JSON, leave Content-Type as is
+					}
+				}
+			}
+
+			if (config.timeout)
+				opt.timeout = config.timeout;
+
+			if (config.limit)
+				opt.limit = config.limit;
+
+			if (config.ignoreSSL)
+				opt.insecure = true;
+
+			// Debug request details
+			if (config.debugRequests) {
+				var debugInfo = {
+					url: opt.url,
+					method: opt.method,
+					timeout: opt.timeout,
+					limit: opt.limit
+				};
+
+				// Add query parameters if they were configured
+				if (config.queryParams && Object.keys(config.queryParams).length > 0) {
+					debugInfo.queryParams = {};
+					for (var key in config.queryParams) {
+						if (config.queryParams.hasOwnProperty(key)) {
+							debugInfo.queryParams[key] = resolveValue(config.queryParams[key], data, instance, $);
+						}
+					}
+				}
+
+				// Add headers with masking for sensitive data
+				if (opt.headers && Object.keys(opt.headers).length > 0) {
+					debugInfo.headers = {};
+					for (var key in opt.headers) {
+						if (opt.headers.hasOwnProperty(key)) {
+							if (key.toLowerCase() === 'authorization') {
+								var authValue = opt.headers[key];
+								if (authValue && authValue.toLowerCase().startsWith('bearer ')) {
+									debugInfo.headers[key] = 'bearer ******';
+								} else if (authValue && authValue.toLowerCase().startsWith('basic ')) {
+									debugInfo.headers[key] = 'basic ******';
+								} else {
+									debugInfo.headers[key] = '******';
+								}
+							} else {
+								debugInfo.headers[key] = opt.headers[key];
+							}
+						}
+					}
+				}
+
+				// Add prettified body if it exists
+				if (opt.body) {
+					try {
+						debugInfo.body = JSON.parse(opt.body);
+					} catch (e) {
+						debugInfo.body = opt.body;
+					}
+				} else if (config.body && config.body.trim() !== '') {
+					// If body was configured but not sent (GET/HEAD request)
+					debugInfo.bodyConfigured = '(body configured but not sent for ' + opt.method + ' request)';
+				}
+
+				console.log(new Date().toISOString() + ' [rest_module] - Request Details:', JSON.stringify(debugInfo, null, 2));
+				instance.status('Request: ' + opt.method + ' to ' + resolvedUrl, 5000);
+			}
+
+			// Function to make the request with retry behavior
+			var attemptNumber = 0;
+			var maxAttempts = (config.retryAttempts || 0) + 1; // Add 1 for the initial attempt
+
+			var makeRequest = function() {
+				attemptNumber++;
+
+				if (config.debugRequests && attemptNumber > 1) {
+					console.log(new Date().toISOString() + ' [rest_module] - Retry attempt ' + (attemptNumber - 1) + ' of ' + config.retryAttempts);
+					instance.status('Retry ' + (attemptNumber - 1) + '/' + config.retryAttempts, 3000);
+				}
+
+				var attemptStart = Date.now();
+
+				opt.callback = function(err, response) {
+					var elapsed = Date.now() - attemptStart;
+					var remaining = Math.max(config.timeout - elapsed, 0);
+
+					var scheduleRetry = function() {
+						if (attemptNumber < maxAttempts) {
+							if (config.debugRequests || config.debugResponses) {
+								console.log(new Date().toISOString() + ' [rest_module] - Retrying after ' + remaining + 'ms (unified timeout)');
+							}
+							setTimeout(makeRequest, remaining);
+						} else {
+							$.destroy();
+						}
+					};
+
+					// Network/timeout or request error
+					if (err) {
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [rest_module] - Request Error (attempt ' + attemptNumber + '): ' + err);
+						}
+						if (attemptNumber < maxAttempts) {
+							scheduleRetry();
+							return;
+						}
+						$.data = err + '';
+						$.send('error');
+						$.destroy();
+						return;
+					}
+
+					// --- Debug response logging ---
+					if (config.debugResponses) {
+						var debugInfo = {
+							status: response.status,
+							headers: response.headers
+						};
+
+						// Add prettified body if it exists
+						if (response.body) {
+							try {
+								debugInfo.body = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+							} catch (e) {
+								debugInfo.body = response.body;
+							}
+						}
+
+						console.log(new Date().toISOString() + ' [rest_module] - Response Details:', JSON.stringify(debugInfo, null, 2));
+					}
+
+					if (response.status === 200) {
+						var body = response.body;
+						if (typeof body === 'string') {
+							try { body = JSON.parse(body); } catch { }
+						}
+						$.data = buildOutput(data, config, body, response.status, response.headers);
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					// --- Handle 5xx retryable errors ---
+					if (response.status >= 500 && response.status < 600 && attemptNumber < maxAttempts) {
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [rest_module] - HTTP ' + response.status + ' -> retrying in ' + remaining + 'ms (unified timeout)');
+						}
+						scheduleRetry();
+						return;
+					}
+
+					// --- Non-retryable or final error ---
+					var errorBody = response.body;
+					if (typeof errorBody === 'string') {
+						try { errorBody = JSON.parse(errorBody); } catch { }
+					}
+					$.data = {
+						Response: {
+							Status: response.status,
+							Headers: response.headers,
+							Body: errorBody || ('HTTP ' + response.status)
+						}
+					};
+					$.send('error');
+					$.destroy();
+				};
+				REQUEST(opt);
+			};
+			// Start first request
+			makeRequest();
+		};
+	};
+
+</script>
+
+<settings>
+
+	<script>
+		// HTTP methods
+		var methods = ['GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'DELETE'];
+	</script>
+
+	<div class="padding">
+
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-6 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+			<div class="col-md-6 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardResponse" config="type:checkbox">Forward response</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Request Configuration</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.method" config="required:true;dirsource:methods">Method</ui-component>
+			</div>
+			<div class="col-md-9 m">
+				<ui-component name="input" path="?.url" config="required:true;placeholder:https://api.example.com/endpoint">URL</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="keyvalue" path="?.queryParams" config="placeholderkey:Parameter name;placeholdervalue:Parameter value and press enter">Query Parameters</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="keyvalue" path="?.headers" config="placeholderkey:Header name;placeholdervalue:Header value and press enter">Headers</ui-component>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Configure Body</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="input" path="?.body" config="type:multiline;rows:10;height:100" class="m"></ui-component>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Response Configuration</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-4 m">
+				<ui-component name="input" path="?.responseStatusCode" config="type:checkbox">Status code</ui-component>
+			</div>
+			<div class="col-md-4 m">
+				<ui-component name="input" path="?.responseHeaders" config="type:checkbox">Headers</ui-component>
+			</div>
+			<div class="col-md-4 m">
+				<ui-component name="input" path="?.responseBody" config="type:checkbox">Body</ui-component>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Additional Options</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.limit" config="type:number">Max. size</ui-component>
+				<div class="help"><i class="ti ti-calculator"></i><ui-bind path="?.limit" config="text:(value||0).filesize()"></ui-bind><br />Response max. size</div>
+			</div>
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.timeout" config="type:number">Timeout</ui-component>
+				<div class="help"><i class="ti ti-clock"></i><ui-bind path="?.timeout" config="text:((value/1000||0)) + ' sec'"></ui-bind><br />Timeout <b>in milliseconds</b></div>
+			</div>
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.retryAttempts" config="type:number;min:0;increment:1">Retry attempts</ui-component>
+			</div>
+			<div class="col-md-3 m additional-options-ssl">
+				<div class="ssl-checkbox-wrapper">
+					<ui-component name="input" path="?.ignoreSSL" config="type:checkbox">Ignore SSL</ui-component>
+					<div class="help ssl-help">Skip SSL certificate validation</div>
+				</div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Component Debug</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.debugRequests" config="type:checkbox">Requests</ui-component>
+				<ui-component name="input" path="?.debugResponses" config="type:checkbox">Responses</ui-component>
+			</div>
+			<div class="col-md-6 m">
+				<div class="help" style="margin-top: 0;">- Debug does not send data in browser F12 console log<br>- Debug prints data into the server side NodeJS log or 'docker log' output</div>
+			</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #0747a6 !important; }
+	.CLASS header { background-color: #0747a6; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Input field styling for text inputs and URL */
+	#flow_settings input[name="url"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[name="url"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Input field styling for number inputs */
+	#flow_settings input[type="number"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[type="number"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Input field styling for keyvalue component */
+	#flow_settings .ui-keyvalue input[type="text"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings .ui-keyvalue input[type="text"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Textarea styling for body */
+	.ui-input-control textarea {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+		overflow-y: auto !important;
+		resize: vertical !important;
+	}
+
+	.ui-dark .ui-input-control textarea {
+		color: #6fa8dc !important;
+	}
+
+	/* Additional Options section specific styling */
+	.additional-options-ssl {
+		display: flex;
+		align-items: flex-start;
+		margin-top: 22px;
+	}
+
+	.ssl-checkbox-wrapper {
+		margin-top: 0;
+		padding-top: 0;
+	}
+
+	.ssl-checkbox-wrapper .ui-input {
+		margin-bottom: 5px;
+	}
+
+	.ssl-checkbox-wrapper .ssl-help {
+		margin-top: 0;
+		font-size: 11px;
+		line-height: 1.3;
+	}
+
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+### REST module
+
+A flexible HTTP client component for making REST API requests with dynamic template support.
+
+## Features
+- **HTTP Methods**: GET, POST, PUT, PATCH, DELETE, HEAD
+- **Dynamic Templates**: Support for `{{ $FLOW_VARS.* }}` and `{{ $data.* }}` in URL, headers, query parameters, and body
+- **Response Configuration**: Choose which parts of the response to return (status code, headers, body)
+- **Data Forwarding**: Preserve original input data and optionally combine responses when chaining multiple REST modules
+- **Retry Logic**: Configurable retry attempts for 5xx errors
+- **SSL Options**: Option to ignore SSL certificate validation
+- **Debug Logging**: Separate request and response debugging to server console
+
+## Dynamic Template Syntax
+The following fields support template variables:
+- **URL**: Full URL with dynamic values
+- **Query Parameters**: Both keys and values support templates
+- **Headers**: Both keys and values support templates
+- **Body**: Full body content with template support
+
+### Template Examples:
+- `{{ $FLOW_VARS.api_token }}` - Read from global variables
+- `{{ $data.user_id }}` - Read from input data
+- `{{ $data.items[0].name }}` - Access nested arrays and objects
+- `{{ $data.count + 5 }}` - Math operations (+, -, *, /)
+
+### Usage in Body:
+```json
+{
+  "userId": "{{ $data.user_id }}",
+  "token": "{{ $FLOW_VARS.api_token }}",
+  "embeddings": [{{ $data.embeddings[0] }}],
+  "count": {{ $data.count + 1 }}
+}
+```
+
+## Response Configuration
+Select which parts of the HTTP response to include:
+- **Status code**: HTTP status code (e.g., 200, 404, 500)
+- **Headers**: Response headers object
+- **Body**: Response body (automatically parsed if JSON)
+
+## Output Structure
+Default (Body only):
+```json
+{
+  "rest_response": {
+    "body": { ... }
+  }
+}
+```
+
+With all response options enabled:
+```json
+{
+  "rest_response": {
+    "status": 200,
+    "headers": { ... },
+    "body": { ... }
+  }
+}
+```
+
+With "Forward input data" enabled:
+```json
+{
+  "forwarded_data": { ... original input ... },
+  "rest_response": { ... }
+}
+```
+
+With both "Forward input data" and "Forward response" enabled (chaining multiple REST modules):
+```json
+{
+  "forwarded_data": { ... original input ... },
+  "rest_response": [
+    { ... first module response ... },
+    { ... second module response ... }
+  ]
+}
+```
+
+## Data Forwarding Behavior
+- **Forward input data**: Preserves the original input data through the chain of REST modules
+  - First module: Creates `forwarded_data` from input
+  - Subsequent modules: Maintains the same `forwarded_data` without nesting
+- **Forward response**: Combines responses from multiple REST modules into an array
+  - Enables accessing previous responses: `$data.rest_response[0]`, `$data.rest_response[1]`, etc.
+  - Useful for chaining API calls where later calls need data from earlier responses
+
+## Additional Options
+- **Timeout**: Request timeout in milliseconds (default: 10000)
+- **Max. size**: Response maximum size in bytes (default: 512000)
+- **Retry attempts**: Number of retries for 5xx errors (default: 0)
+- **Ignore SSL**: Skip SSL certificate validation
+
+## Debug Output
+- **Requests**: Logs URL, method, headers (with auth masked), query params, and body
+- **Responses**: Logs status code, headers, and response body
+- Debug prints to server-side Node.js log or docker log output (not browser console)
+</readme>

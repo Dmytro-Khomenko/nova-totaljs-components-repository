@@ -1,0 +1,329 @@
+<script total>
+
+	exports.id = 'consolelog_advanced';
+	exports.name = 'console.log(advanced)';
+	exports.icon = 'ti ti-print';
+	exports.author = 'Demon';
+	exports.version = '1.6.5';
+	exports.group = 'Common';
+	exports.config = { 
+		timestamp: true,
+		timezone: 'UTC',
+		source: true, 
+		jsonoutput: false 
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+
+	exports.make = function(instance, config) {
+		
+		var getTimestamp = function() {
+			try {
+				var now = new Date();
+				var timezone = config.timezone || 'UTC';
+				
+				// Check if timezone is in GMT+N or GMT-N format
+				if (timezone.match(/^GMT[+-]\d+$/)) {
+					// Extract offset from GMT+N or GMT-N
+					var offset = parseInt(timezone.substring(3)); // Gets +N or -N
+					var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+					var adjustedTime = new Date(utcTime + (offset * 3600000));
+					
+					// Format as ISO 8601
+					var year = adjustedTime.getUTCFullYear();
+					var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+					var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+					var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+					var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+					var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+					var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+					
+					return year + '-' + month + '-' + day + 'T' + hour + ':' + minute + ':' + second + '.' + ms + 'Z';
+				}
+				
+				// Use Intl.DateTimeFormat for IANA timezone identifiers
+				var formatter = new Intl.DateTimeFormat('en-US', {
+					timeZone: timezone,
+					year: 'numeric',
+					month: '2-digit',
+					day: '2-digit',
+					hour: '2-digit',
+					minute: '2-digit',
+					second: '2-digit',
+					fractionalSecondDigits: 3,
+					hour12: false
+				});
+				
+				var parts = formatter.formatToParts(now);
+				var dateParts = {};
+				
+				for (var part of parts) {
+					dateParts[part.type] = part.value;
+				}
+				
+				// Build ISO 8601 format: YYYY-MM-DDTHH:mm:ss.sssZ
+				var timestamp = dateParts.year + '-' + 
+					dateParts.month + '-' + 
+					dateParts.day + 'T' + 
+					dateParts.hour + ':' + 
+					dateParts.minute + ':' + 
+					dateParts.second + '.' + 
+					dateParts.fractionalSecond + 'Z';
+				
+				return timestamp;
+			} catch (e) {
+				// Fallback to UTC if timezone is invalid
+				return new Date().toISOString();
+			}
+		};
+		
+		instance.message = function($) {
+			try {
+				var data = $.data;
+				var sourceName = $.from && $.from.module && $.from.module.name ? $.from.module.name : 'Unknown';
+				
+				// Pad or truncate to 20 characters for plain text mode
+				var sourceNamePadded = sourceName;
+				if (sourceNamePadded.length > 20) {
+					sourceNamePadded = sourceNamePadded.substring(0, 20);
+				} else {
+					sourceNamePadded = sourceNamePadded + ' '.repeat(20 - sourceNamePadded.length);
+				}
+				
+				// Check if JSON output mode is enabled
+				if (config.jsonoutput) {
+					// JSON OUTPUT MODE: Everything wrapped in JSON structure
+					
+					// Check if data is an array - iterate through it
+					if (Array.isArray(data)) {
+						for (var i = 0; i < data.length; i++) {
+							var logEntry = {};
+							
+							if (config.timestamp) {
+								logEntry.timestamp = getTimestamp();
+							}
+							
+							if (config.source) {
+								logEntry.component = sourceName;
+							}
+							
+							logEntry.message = data[i];
+							
+							console.log(JSON.stringify(logEntry));
+						}
+					} else {
+						// Single item
+						var logEntry = {};
+						
+						if (config.timestamp) {
+							logEntry.timestamp = getTimestamp();
+						}
+						
+						if (config.source) {
+							logEntry.component = sourceName;
+						}
+						
+						logEntry.message = data;
+						
+						console.log(JSON.stringify(logEntry));
+					}
+				} else {
+					// PLAIN TEXT MODE: Inline format
+					
+					// Check if data is an array - iterate through it
+					if (Array.isArray(data)) {
+						for (var i = 0; i < data.length; i++) {
+							var output = '';
+							
+							if (config.timestamp) {
+								output += getTimestamp() + ' ';
+							}
+							
+							if (config.source) {
+								output += 'component: ' + sourceNamePadded + ' ';
+							}
+							
+							output += 'message: ';
+							
+							// Format array item as inline JSON or string
+							if (data[i] !== null && data[i] !== undefined && typeof data[i] === 'object') {
+								output += JSON.stringify(data[i]);
+							} else {
+								output += String(data[i]);
+							}
+							
+							console.log(output);
+						}
+					} else {
+						// Single item - always inline
+						var output = '';
+						
+						if (config.timestamp) {
+							output += getTimestamp() + ' ';
+						}
+						
+						if (config.source) {
+							output += 'component: ' + sourceNamePadded + ' ';
+						}
+						
+						output += 'message: ';
+						
+						// Format data as inline JSON or string
+						if (data !== null && data !== undefined && typeof data === 'object') {
+							output += JSON.stringify(data);
+						} else {
+							output += String(data);
+						}
+						
+						console.log(output);
+					}
+				}
+			} catch (e) {
+				console.log('console.log(Advanced) Error:', e.message);
+			}
+			
+			$.destroy();
+		};
+	};
+
+</script>
+
+<settings>
+	<script>
+		// Timezone directory - Popular IANA identifiers + GMT offsets
+		var timezones = [
+			'UTC',
+			// GMT Offsets (fixed, no DST)
+			'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+			'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+			// Europe (with DST support)
+			'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid', 
+			'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague', 
+			'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm', 
+			'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon', 
+			'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+			// Asia (with DST support where applicable)
+			'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore', 
+			'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta', 
+			'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh', 
+			'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty', 
+			'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+		];
+	</script>
+
+	<div class="padding">
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Output Format Settings</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+				<div class="help">Include ISO 8601 timestamp in console output</div>
+			</div>
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.source" config="type:checkbox">Source component</ui-component>
+				<div class="help">Include source component name in console output</div>
+			</div>
+		</div>
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6">
+				<div class="timezone-field-wrapper m">
+					<ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+					<ui-component name="input" path="?.timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+					<div class="help">Time offset (e.g. UTC, GMT-3, Europe/Kiev)</div>
+				</div>
+			</div>
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.jsonoutput" config="type:checkbox">JSON output</ui-component>
+				<div class="help">Wrap all output in JSON format: { ... }</div>
+			</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	/* Fix directory dropdown positioning */
+	#flow_settings .ui-directory {
+		position: fixed !important;
+	}
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Timezone field wrapper - 65% width of its column */
+	.timezone-field-wrapper {
+		width: 65%;
+	}
+
+	/* Remove custom font styling from timezone label to match other labels */
+	.timezone-field-wrapper .ui-input-label {
+		font-size: inherit !important;
+		color: inherit !important;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+# console.log(Advanced)
+
+Enhanced console logging component with configurable output formatting.
+
+
+## Features
+
+- **Timestamp (ISO 8601)**: Adds ISO 8601 formatted timestamp to each log entry
+- **Timezone with dropdown**: Supports both GMT offsets (fixed) and IANA timezone identifiers (with automatic DST)
+- **Source component**: Displays the name of the component sending the message
+- **JSON output**: When enabled, wraps all output in structured JSON format for easy parsing
+- **Array iteration**: Arrays are automatically iterated, logging each element separately
+
+
+## Configuration
+
+All options are configurable in the component settings:
+
+- **Timestamp (ISO 8601)** - Default: `true` - Include timestamp in output
+- **Timezone** - Default: `UTC` - Supports both IANA timezone identifiers and GMT offset syntax
+- **Source component** - Default: `true` - Include source component name
+- **JSON output** - Default: `false` - Wrap output in structured JSON format
+
+
+## Output Modes
+
+### Plain Text Mode (JSON output = false)
+Human-readable format with inline JSON. Best for visual inspection of logs.
+- Format: `<timestamp> component: <name>  message: <content>`
+- All content on single lines (no multi-line formatting)
+- Arrays are iterated, each element logged separately
+- Objects are inline JSON strings
+
+### JSON Output Mode (JSON output = true)
+Structured JSON format. Best for log processing tools and parsers (e.g., Logstash, Fluentd).
+- Format: `{"timestamp": "...", "component": "...", "message": ...}`
+- Each log line is a complete, parseable JSON object
+- Arrays are iterated, each element in its own JSON wrapper
+- Message content preserved as native JSON types (not stringified)
+
+</readme>

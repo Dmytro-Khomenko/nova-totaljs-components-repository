@@ -1,0 +1,807 @@
+<script total>
+
+	exports.id = 'genesys_api';
+	exports.name = 'Genesys [API]';
+	exports.group = 'Genesys';
+	exports.icon = 'ti ti-code-branch';
+	exports.author = 'Total.js';
+	exports.version = '1.8.1';
+	exports.config = {
+		forwardInputData: false,
+		region: 'Europe (Frankfurt) / eu-central-1',
+		method: 'GET',
+		path: '',
+		queryParams: {},
+		headers: {
+			'Content-Type': 'application/json',
+			'Authorization': '{{ $data.token_type }} {{ $data.access_token }}'
+		},
+		body: '',
+		timeout: 10000,
+		limit: 512000,
+		retryAttempts: 0,
+		ignoreSSL: false,
+		debugRequests: false,
+		debugResponses: false
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'error', name: 'Error' }];
+
+	exports.make = function(instance, config) {
+
+		var regionUrls = {
+			'us-east-1': 'https://api.mypurecloud.com',
+			'us-east-2': 'https://api.use2.us-gov-pure.cloud',
+			'us-west-2': 'https://api.usw2.pure.cloud',
+			'ca-central-1': 'https://api.cac1.pure.cloud',
+			'eu-west-1': 'https://api.mypurecloud.ie',
+			'eu-west-2': 'https://api.euw2.pure.cloud',
+			'eu-central-1': 'https://api.mypurecloud.de',
+			'eu-central-2': 'https://api.euc2.pure.cloud',
+			'ap-south-1': 'https://api.aps1.pure.cloud',
+			'ap-northeast-1': 'https://api.mypurecloud.jp',
+			'ap-northeast-2': 'https://api.apne2.pure.cloud',
+			'ap-northeast-3': 'https://api.apne3.pure.cloud',
+			'ap-southeast-2': 'https://api.mypurecloud.com.au',
+			'sa-east-1': 'https://api.sae1.pure.cloud',
+			'me-central-1': 'https://api.mec1.pure.cloud'
+		};
+
+		function buildOutput(data, config, genesysResponse) {
+			if (config.forwardInputData) {
+				return {
+					forwarded_data: data,
+					genesys_response: genesysResponse
+				};
+			}
+			return { genesys_response: genesysResponse };
+		}
+
+		var resolvePathOrValue = function(expr, data, instance, $) {
+			expr = expr.trim();
+
+			// Handle $FLOW_VARS for flow variables
+			if (expr.startsWith('$FLOW_VARS.')) {
+				var path = expr.substring(11); // Remove '$FLOW_VARS.'
+				// Access flow variables from instance.main.variables
+				var value = instance.main.variables ? instance.main.variables[path] : undefined;
+				if (value === undefined && instance.main.variables2) {
+					// Fallback to variables2 if not found in variables
+					value = instance.main.variables2[path];
+				}
+				return value !== undefined ? value : null;
+			}
+
+			// Handle $data for message data
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+
+			var num = parseFloat(expr);
+			if (!isNaN(num) && expr === num.toString()) {
+				return num;
+			}
+			return expr;
+		};
+
+		var resolveValue = function(valueStr, data, instance, $) {
+			if (typeof valueStr !== 'string') {
+				return valueStr;
+			}
+
+			var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+?)$/);
+				if (mathMatch) {
+					var leftExpr = mathMatch[1].trim();
+					var operator = mathMatch[2];
+					var rightExpr = mathMatch[3].trim();
+
+					var leftNum = parseFloat(leftExpr);
+					var rightNum = parseFloat(rightExpr);
+
+					if (isNaN(leftNum)) {
+						var leftResolved = resolvePathOrValue(leftExpr, data, instance, $);
+						leftNum = parseFloat(leftResolved);
+					}
+
+					if (isNaN(rightNum)) {
+						var rightResolved = resolvePathOrValue(rightExpr, data, instance, $);
+						rightNum = parseFloat(rightResolved);
+					}
+
+					if (!isNaN(leftNum) && !isNaN(rightNum)) {
+						if (operator === '+') {
+							return leftNum + rightNum;
+						} else if (operator === '-') {
+							return leftNum - rightNum;
+						} else if (operator === '*') {
+							return leftNum * rightNum;
+						} else if (operator === '/') {
+							return rightNum !== 0 ? leftNum / rightNum : 0;
+						}
+					}
+					return '<bad expression>';
+				} else {
+					var resolved = resolvePathOrValue(expression, data, instance, $);
+					if (resolved === null) {
+						return '<bad expression>';
+					}
+					return resolved !== expression ? resolved : '<bad expression>';
+				}
+			});
+
+			return result;
+		};
+
+		instance.message = function($) {
+
+			let data = $?.data || {};
+
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			// Ensure default values for timeout, limit, and retryAttempts
+			if (config.timeout === undefined || config.timeout === null)
+				config.timeout = 10000;
+			if (config.limit === undefined || config.limit === null)
+				config.limit = 512000;
+			if (config.retryAttempts === undefined || config.retryAttempts === null)
+				config.retryAttempts = 0;
+
+			if (!config.path) {
+				$.data = 'Path is required';
+				$.send('error');
+				$.destroy();
+				return;
+			}
+
+			// Extract region code from config (format: "Display Name / code")
+			var regionCode = config.region;
+			if (regionCode && regionCode.indexOf(' / ') !== -1) {
+				var parts = regionCode.split(' / ');
+				regionCode = parts[parts.length - 1];
+			}
+
+			var baseUrl = regionUrls[regionCode];
+			if (!baseUrl) {
+				$.data = 'Invalid region selected: ' + regionCode;
+				if (config.debugRequests) {
+					console.log(new Date().toISOString() + ' [genesys_api] - Invalid region code:', regionCode);
+					console.log(new Date().toISOString() + ' [genesys_api] - Available regions:', Object.keys(regionUrls).join(', '));
+				}
+				$.send('error');
+				$.destroy();
+				return;
+			}
+
+			var resolvedPath = resolveValue(config.path || '', data, instance, $);
+
+			// Add query parameters if specified
+			if (config.queryParams && typeof config.queryParams === 'object' && Object.keys(config.queryParams).length > 0) {
+				var queryParts = [];
+				for (var key in config.queryParams) {
+					if (config.queryParams.hasOwnProperty(key) && config.queryParams[key]) {
+						var resolvedKey = resolveValue(key, data, instance, $);
+						var resolvedValue = resolveValue(config.queryParams[key], data, instance, $);
+						queryParts.push(encodeURIComponent(resolvedKey) + '=' + encodeURIComponent(resolvedValue));
+					}
+				}
+
+				if (queryParts.length > 0) {
+					var separator = resolvedPath.indexOf('?') !== -1 ? '&' : '?';
+					resolvedPath += separator + queryParts.join('&');
+				}
+			}
+
+			var fullUrl = baseUrl + (resolvedPath.startsWith('/') ? resolvedPath : '/' + resolvedPath);
+
+			var opt = {};
+			opt.method = config.method || 'GET';
+			opt.url = fullUrl;
+
+			// Apply timeout and limit from config (use defaults if not set)
+			opt.timeout = config.timeout || 10000;
+			opt.limit = config.limit || 512000;
+
+			// Configure headers
+			if (config.headers && typeof config.headers === 'object' && Object.keys(config.headers).length > 0) {
+				opt.headers = {};
+				for (var key in config.headers) {
+					if (config.headers.hasOwnProperty(key) && config.headers[key]) {
+						var resolvedKey = resolveValue(key, data, instance, $);
+						var resolvedValue = resolveValue(config.headers[key], data, instance, $);
+						opt.headers[resolvedKey] = resolvedValue;
+					}
+				}
+			}
+
+			// Configure body for methods that support it
+			if (config.body && config.body.trim() !== '' && opt.method !== 'GET' && opt.method !== 'HEAD') {
+				var resolvedBody = resolveValue(config.body.trim(), data, instance, $);
+
+				// Replace <bad expression> with string literal for valid JSON
+				resolvedBody = resolvedBody.replace(/<bad expression>/g, '"<bad expression>"');
+
+				// Try to parse as JSON to validate
+				try {
+					var parsedBody = JSON.parse(resolvedBody);
+					opt.body = JSON.stringify(parsedBody);
+					if (!opt.headers) {
+						opt.headers = {};
+					}
+					if (!opt.headers['Content-Type']) {
+						opt.headers['Content-Type'] = 'application/json';
+					}
+				} catch (e) {
+					// If not valid JSON, send as-is
+					opt.body = resolvedBody;
+				}
+			}
+
+			// Handle SSL ignore
+			if (config.ignoreSSL && baseUrl.startsWith('https')) {
+				opt.insecure = true;
+			}
+
+			// Debug logging for requests
+			if (config.debugRequests) {
+				var debugInfo = {
+					url: opt.url,
+					method: opt.method,
+					headers: {},
+					timeout: opt.timeout,
+					limit: opt.limit
+				};
+
+				// Add query parameters info if any were configured
+				if (config.queryParams && Object.keys(config.queryParams).length > 0) {
+					debugInfo.queryParams = config.queryParams;
+				}
+
+				// Mask Authorization header
+				if (opt.headers) {
+					for (var key in opt.headers) {
+						if (opt.headers.hasOwnProperty(key)) {
+							if (key.toLowerCase() === 'authorization') {
+								var authValue = opt.headers[key];
+								if (authValue && authValue.toLowerCase().startsWith('bearer ')) {
+									debugInfo.headers[key] = 'bearer ******';
+								} else if (authValue && authValue.toLowerCase().startsWith('basic ')) {
+									debugInfo.headers[key] = 'basic ******';
+								} else {
+									debugInfo.headers[key] = '******';
+								}
+							} else {
+								debugInfo.headers[key] = opt.headers[key];
+							}
+						}
+					}
+				}
+
+				// Add prettified body if it exists
+				if (opt.body) {
+					try {
+						debugInfo.body = JSON.parse(opt.body);
+					} catch (e) {
+						debugInfo.body = opt.body;
+					}
+				} else if (config.body && config.body.trim() !== '') {
+					// If body was configured but not sent (GET/HEAD request)
+					debugInfo.bodyConfigured = '(body configured but not sent for ' + opt.method + ' request)';
+				}
+
+				console.log(new Date().toISOString() + ' [genesys_api] - Request Details:', JSON.stringify(debugInfo, null, 2));
+				instance.status('Request: ' + opt.method + ' to ' + config.region, 5000);
+			}
+
+			// Function to make the request with unified timeout behavior
+			var attemptNumber = 0;
+			var maxAttempts = (config.retryAttempts || 0) + 1; // Add 1 for the initial attempt
+			var has429Retry = false; // Track if we've already retried for 429
+
+			var makeRequest = function() {
+				attemptNumber++;
+
+				if (config.debugRequests && attemptNumber > 1) {
+					console.log(new Date().toISOString() + ' [genesys_api] - Retry attempt ' + (attemptNumber - 1) + ' of ' + config.retryAttempts);
+					instance.status('Retry ' + (attemptNumber - 1) + '/' + config.retryAttempts, 3000);
+				}
+
+				var attemptStart = Date.now();
+
+				opt.callback = function(err, response) {
+					var elapsed = Date.now() - attemptStart;
+					var remaining = Math.max(config.timeout - elapsed, 0);
+
+					var scheduleRetry = function() {
+						if (attemptNumber < maxAttempts) {
+							if (config.debugRequests || config.debugResponses) {
+								console.log(new Date().toISOString() + ' [genesys_api] - Retrying after ' + remaining + 'ms (unified timeout)');
+							}
+							setTimeout(makeRequest, remaining);
+						} else {
+							$.destroy();
+						}
+					};
+
+					// Network/timeout or request error
+					if (err) {
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [genesys_api] - Request Error (attempt ' + attemptNumber + '): ' + err);
+						}
+						if (attemptNumber < maxAttempts) {
+							scheduleRetry();
+							return;
+						}
+						$.data = err + '';
+						$.send('error');
+						$.destroy();
+						return;
+					}
+
+					// --- Debug response logging ---
+					if (config.debugResponses) {
+						console.log(new Date().toISOString() + ' [genesys_api] - Response Status:', response.status);
+					}
+
+					if (response.status === 200) {
+						var body = response.body;
+						if (typeof body === 'string') {
+							try { body = JSON.parse(body); } catch { }
+						}
+						$.data = buildOutput(data, config, body);
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					// --- Handle 429 Rate Limit with retry-after header ---
+					if (response.status === 429 && !has429Retry) {
+						has429Retry = true; // Mark that we've attempted the 429 retry
+						
+						// Extract retry-after header (in seconds)
+						var retryAfter = 60; // Default to 60 seconds
+						if (response.headers && response.headers['retry-after']) {
+							var headerValue = parseInt(response.headers['retry-after'], 10);
+							if (!isNaN(headerValue) && headerValue > 0) {
+								retryAfter = headerValue;
+							}
+						}
+						
+						// Add random buffer between 10-30 seconds to prevent thundering herd
+						var randomBuffer = Math.floor(Math.random() * 21) + 10; // Random 10-30 seconds
+						retryAfter = retryAfter + randomBuffer;
+						
+						var retryAfterMs = retryAfter * 1000; // Convert to milliseconds
+						
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [genesys_api] - HTTP 429 Rate Limit -> retrying once in ' + retryAfter + ' seconds (' + retryAfterMs + 'ms, includes +' + randomBuffer + 's random buffer)');
+						}
+						
+						setTimeout(makeRequest, retryAfterMs);
+						return;
+					}
+
+					// --- Handle 5xx retryable errors ---
+					if (response.status >= 500 && response.status < 600 && attemptNumber < maxAttempts) {
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [genesys_api] - HTTP ' + response.status + ' -> retrying in ' + remaining + 'ms (unified timeout)');
+						}
+						scheduleRetry();
+						return;
+					}
+
+					// --- Non-retryable or final error ---
+					var errorBody = response.body;
+					if (typeof errorBody === 'string') {
+						try { errorBody = JSON.parse(errorBody); } catch { }
+					}
+					$.data = {
+						Response: {
+							Status: response.status,
+							Headers: response.headers,
+							Body: errorBody || ('HTTP ' + response.status)
+						}
+					};
+					$.send('error');
+					$.destroy();
+				};
+				REQUEST(opt);
+			};
+			// Start first request
+			makeRequest();
+		};
+	};
+
+</script>
+
+<settings>
+
+	<script>
+		// Region options
+		var regions = [
+			'US East (Virginia) / us-east-1',
+			'US East 2 (Ohio) / us-east-2',
+			'US West (Oregon) / us-west-2',
+			'Canada (Central) / ca-central-1',
+			'Europe (Ireland) / eu-west-1',
+			'Europe (London) / eu-west-2',
+			'Europe (Frankfurt) / eu-central-1',
+			'Europe (Zurich) / eu-central-2',
+			'Asia Pacific (Mumbai) / ap-south-1',
+			'Asia Pacific (Tokyo) / ap-northeast-1',
+			'Asia Pacific (Seoul) / ap-northeast-2',
+			'Asia Pacific (Osaka) / ap-northeast-3',
+			'Asia Pacific (Sydney) / ap-southeast-2',
+			'South America (São Paulo) / sa-east-1',
+			'Middle East (UAE) / me-central-1'
+		];
+
+		// HTTP methods
+		var methods = ['GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'DELETE'];
+	</script>
+
+	<div class="padding">
+
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>API Configuration</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.region" config="required:true;dirsource:regions">PureCloud region</ui-component>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Request</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.method" config="required:true;dirsource:methods">Method</ui-component>
+			</div>
+			<div class="col-md-9 m">
+				<ui-component name="input" path="?.path" config="required:true;placeholder:/api/v2/analytics/conversations/activity/query">Path</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="keyvalue" path="?.queryParams" config="placeholderkey:Parameter name;placeholdervalue:Parameter value and press enter">Query Parameters</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="keyvalue" path="?.headers" config="placeholderkey:Header name;placeholdervalue:Header value and press enter">Headers</ui-component>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Configure Body</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="input" path="?.body" config="type:multiline;rows:10;height:100" class="m"></ui-component>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Additional Options</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.limit" config="type:number">Max. size</ui-component>
+				<div class="help"><i class="ti ti-calculator"></i><ui-bind path="?.limit" config="text:(value||0).filesize()"></ui-bind><br />Response max. size <b>in bytes</b></div>
+			</div>
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.timeout" config="type:number">Timeout</ui-component>
+				<div class="help"><i class="ti ti-clock"></i><ui-bind path="?.timeout" config="text:((value/1000||0)) + ' sec'"></ui-bind><br />Timeout <b>in milliseconds</b></div>
+			</div>
+			<div class="col-md-3 m">
+				<ui-component name="input" path="?.retryAttempts" config="type:number;min:0;increment:1">Retry attempts</ui-component>
+			</div>
+			<div class="col-md-3 m additional-options-ssl">
+				<div class="ssl-checkbox-wrapper">
+					<ui-component name="input" path="?.ignoreSSL" config="type:checkbox">Ignore SSL</ui-component>
+					<div class="help ssl-help">Skip SSL certificate validation</div>
+				</div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb section-divider" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Component Debug</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.debugRequests" config="type:checkbox">Requests</ui-component>
+				<ui-component name="input" path="?.debugResponses" config="type:checkbox">Responses</ui-component>
+			</div>
+			<div class="col-md-6 m">
+				<div class="help" style="margin-top: 0;">- Debug does not send data in browser F12 console log<br>- Debug prints data into the server side NodeJS log or 'docker log' output</div>
+			</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #e64d3c !important; }
+	.CLASS header { background-color: #e64d3c; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Input field styling for text inputs and Path */
+	#flow_settings input[name="path"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[name="path"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Input field styling for number inputs */
+	#flow_settings input[type="number"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[type="number"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Input field styling for keyvalue component */
+	#flow_settings .ui-keyvalue input[type="text"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings .ui-keyvalue input[type="text"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Textarea styling for body */
+	.ui-input-control textarea {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+		overflow-y: auto !important;
+		resize: vertical !important;
+	}
+
+	.ui-dark .ui-input-control textarea {
+		color: #6fa8dc !important;
+	}
+
+	/* Additional Options section specific styling */
+	.additional-options-ssl {
+		display: flex;
+		align-items: flex-start;
+		margin-top: 22px;
+	}
+
+	.ssl-checkbox-wrapper {
+		margin-top: 0;
+		padding-top: 0;
+	}
+
+	.ssl-checkbox-wrapper .ui-input {
+		margin-bottom: 5px;
+	}
+
+	.ssl-checkbox-wrapper .ssl-help {
+		margin-top: 0;
+		font-size: 11px;
+		line-height: 1.3;
+	}
+
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+# Genesys API
+https://developer.genesys.cloud/devapps/api-explorer
+This component handles HTTP requests to the Genesys PureCloud API with configurable regions, methods, headers, query parameters, and body.
+
+## Features
+- **Region Support**: All Genesys PureCloud regions (US, EU, AP, CA, SA, ME)
+- **HTTP Methods**: GET, POST, PUT, PATCH, DELETE, HEAD
+- **Dynamic Values**: Template support for paths, headers, query parameters, and body with `{{ }}` syntax
+- **Query Parameters**: Key-value pairs with template support
+- **Retry Logic**: Configurable retry attempts for 5xx errors and automatic 429 rate limit handling
+- **SSL Options**: Option to ignore SSL certificate validation
+- **Debug Logging**: Separate request and response debugging to server console
+- **Forward Input Data**: Optional forwarding of input data alongside API response
+
+## Dynamic Value Templates
+The following fields support template syntax to read from global variables, input data, perform math operations, and concatenate text:
+- **Path**
+- **Query Parameters** (both keys and values)
+- **Headers** (both keys and values)
+- **Body**
+
+
+### Template Syntax:
+- **Global variables**: `{{ $FLOW_VARS.key }}` → reads from global variables (e.g., `{{ $FLOW_VARS.genesys_access_token }}`)
+- **Static value**: `SomeText` → outputs `"SomeText"`
+- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1`
+- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21`
+- **Array path**: `{{ $data.key3[0].key31 }}` → reads from `$.data.key3[0].key31`
+
+
+### Examples:
+- Authorization header: `bearer {{ $FLOW_VARS.genesys_access_token }}`
+- Query parameter: `pageSize={{ $data.pageSize }}`
+- Path with variable: `/api/v2/users/{{ $data.userId }}`
+
+
+### Math Operations:
+- `{{ $data.key4 + 5 }}` → addition
+- `{{ $data.key4 - 3 }}` → subtraction
+- `{{ $data.key4 * 2 }}` → multiplication
+- `{{ $data.key4 / 2 }}` → division
+
+
+### Text Concatenation:
+- `{{ $data.key1 }} test1` → `"value1 test1"`
+- `prefix_{{ $data.key1 }}_suffix` → `"prefix_value1_suffix"`
+- `bearer {{ $FLOW_VARS.token }}` → `"bearer abc123..."`
+
+
+### Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $FLOW_VARS.nonexistent }}` → variable doesn't exist
+- `{{ $data.nonexistent }}` → path doesn't exist
+- `{{ $data.key1 + 5 }}` → cannot add number to string
+- `{{ $data.key2.invalid }}` → invalid nested path
+
+
+## Query Parameters Support
+The component supports query parameters with template support:
+- **Query Parameters**: Key-value pairs added to the URL query string (supports templates in both keys and values)
+
+Query parameters are automatically URL-encoded and appended to the path:
+- If path has no query string: `?key1=value1&key2=value2`
+- If path already has query string: `&key1=value1&key2=value2`
+
+Template expressions in query parameters:
+- Support `{{ $FLOW_VARS.* }}` syntax for global variables
+- Support `{{ $data.* }}` syntax for dynamic values
+- Both keys and values support templates
+- Values are automatically URL-encoded
+
+
+## Additional Options
+- **Timeout**: Request timeout in milliseconds (default: 10000)
+- **Max. size**: Response maximum size in bytes (default: 512000)
+- **Retry attempts**: Number of retries for 5xx errors (default: 0)
+- **429 Rate Limit Handling**: Automatic single retry using `retry-after` header (ignores configured timeout and retry settings). Adds random 10-30 second buffer to prevent thundering herd.
+
+
+## Inputs and Outputs
+- **Input**: Triggers the HTTP request (accepts any data)
+- **Output**: Returns response wrapped in `genesys_response` object. When "Forward input data" is enabled, also includes `forwarded_data` with the original input data.
+- **Error**: Returns error details for non-200 responses or request failures
+
+
+## Output Structure
+When "Forward input data" is disabled (default):
+```json
+{
+  "genesys_response": { ... API response ... }
+}
+```
+
+When "Forward input data" is enabled:
+```json
+{
+  "forwarded_data": { ... original input data ... },
+  "genesys_response": { ... API response ... }
+}
+```
+
+
+## Behavior
+- Triggered by any input request
+- Constructs full URL from region and path
+- Resolves templates in path, query parameters, headers, and body (supports `$FLOW_VARS` and `$data`)
+- Applies query parameters to the URL if specified
+- Applies timeout and size limit settings
+- Sends HTTP request with configured method, headers, and body
+- Automatically sets Content-Type to application/json for JSON bodies
+- Returns parsed JSON response wrapped in `genesys_response` on success (HTTP 200)
+- Optionally includes `forwarded_data` with original input when enabled
+- Returns error details with status, headers, and body for failures
+- **429 Rate Limit**: Automatically retries once after the duration specified in `retry-after` header (in seconds) plus a random 10-30 second buffer to prevent thundering herd
+- **5xx Errors**: Retries based on configured retry attempts using the configured timeout
+- Debug logging can be enabled for requests and responses
+
+## Debug Output
+When "Requests" debug is enabled, the following information is logged to the server console:
+- URL (with resolved path and query parameters)
+- HTTP Method
+- Headers (with Authorization masked for security)
+- Query Parameters (if configured)
+- Body (prettified JSON if applicable)
+- Timeout and limit values
+- Note if body was configured but not sent (for GET/HEAD requests)
+
+</readme>

@@ -1,0 +1,612 @@
+<script total>
+
+	exports.id = 'genesys_oauth';
+	exports.name = 'Genesys [OAuth]';
+	exports.group = 'Genesys';
+	exports.icon = 'ti ti-code-branch';
+	exports.author = 'Total.js';
+	exports.version = '1.4.1';
+	exports.config = {
+		authType: 'client_credentials',
+		region: 'US East (Virginia) / us-east-1',
+		clientId: '',
+		clientSecret: '',
+		timeout: 10000,
+		limit: 512000,
+		retryAttempts: 0,
+		ignoreSSL: false,
+		debugRequests: false,
+		debugResponses: false
+	};
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'error', name: 'Error' }];
+
+	exports.make = function(instance, config) {
+
+		var regionUrls = {
+			'us-east-1': 'https://login.mypurecloud.com',
+			'us-east-2': 'https://login.use2.us-gov-pure.cloud',
+			'us-west-2': 'https://login.usw2.pure.cloud',
+			'ca-central-1': 'https://login.cac1.pure.cloud',
+			'eu-west-1': 'https://login.mypurecloud.ie',
+			'eu-west-2': 'https://login.euw2.pure.cloud',
+			'eu-central-1': 'https://login.mypurecloud.de',
+			'eu-central-2': 'https://login.euc2.pure.cloud',
+			'ap-south-1': 'https://login.aps1.pure.cloud',
+			'ap-northeast-1': 'https://login.mypurecloud.jp',
+			'ap-northeast-2': 'https://login.apne2.pure.cloud',
+			'ap-northeast-3': 'https://login.apne3.pure.cloud',
+			'ap-southeast-2': 'https://login.mypurecloud.com.au',
+			'sa-east-1': 'https://login.sae1.pure.cloud',
+			'me-central-1': 'https://login.mec1.pure.cloud'
+		};
+
+		var resolvePathOrValue = function(expr, data, instance, $) {
+			expr = expr.trim();
+
+			// Handle $FLOW_VARS for flow variables
+			if (expr.startsWith('$FLOW_VARS.')) {
+				var path = expr.substring(11); // Remove '$FLOW_VARS.'
+				// Access flow variables from instance.main.variables
+				var value = instance.main.variables ? instance.main.variables[path] : undefined;
+				if (value === undefined && instance.main.variables2) {
+					// Fallback to variables2 if not found in variables
+					value = instance.main.variables2[path];
+				}
+				return value !== undefined ? value : null;
+			}
+
+			// Handle $data for message data
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+
+			var num = parseFloat(expr);
+			if (!isNaN(num) && expr === num.toString()) {
+				return num;
+			}
+			return expr;
+		};
+
+		var resolveValue = function(valueStr, data, instance, $) {
+			if (typeof valueStr !== 'string') {
+				return valueStr;
+			}
+
+			var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+?)$/);
+				if (mathMatch) {
+					var leftExpr = mathMatch[1].trim();
+					var operator = mathMatch[2];
+					var rightExpr = mathMatch[3].trim();
+
+					var leftNum = parseFloat(leftExpr);
+					var rightNum = parseFloat(rightExpr);
+
+					if (isNaN(leftNum)) {
+						var leftResolved = resolvePathOrValue(leftExpr, data, instance, $);
+						leftNum = parseFloat(leftResolved);
+					}
+
+					if (isNaN(rightNum)) {
+						var rightResolved = resolvePathOrValue(rightExpr, data, instance, $);
+						rightNum = parseFloat(rightResolved);
+					}
+
+					if (!isNaN(leftNum) && !isNaN(rightNum)) {
+						if (operator === '+') {
+							return leftNum + rightNum;
+						} else if (operator === '-') {
+							return leftNum - rightNum;
+						} else if (operator === '*') {
+							return leftNum * rightNum;
+						} else if (operator === '/') {
+							return rightNum !== 0 ? leftNum / rightNum : 0;
+						}
+					}
+					return '<bad expression>';
+				} else {
+					var resolved = resolvePathOrValue(expression, data, instance, $);
+					if (resolved === null) {
+						return '<bad expression>';
+					}
+					return resolved !== expression ? resolved : '<bad expression>';
+				}
+			});
+
+			return result;
+		};
+
+		instance.message = function($) {
+
+			let data = $?.data || {};
+
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			// Ensure default values for timeout, limit, and retryAttempts
+			if (config.timeout === undefined || config.timeout === null)
+				config.timeout = 10000;
+			if (config.limit === undefined || config.limit === null)
+				config.limit = 512000;
+			if (config.retryAttempts === undefined || config.retryAttempts === null)
+				config.retryAttempts = 0;
+
+			// Resolve Client ID and Client Secret with templates
+			var resolvedClientId = resolveValue(config.clientId || '', data, instance, $);
+			var resolvedClientSecret = resolveValue(config.clientSecret || '', data, instance, $);
+
+			if (!resolvedClientId || !resolvedClientSecret) {
+				$.data = 'Client ID and Client Secret are required';
+				$.send('error');
+				$.destroy();
+				return;
+			}
+
+			if (config.authType !== 'client_credentials') {
+				$.data = 'Only Client Credentials Grant is currently supported';
+				$.send('error');
+				$.destroy();
+				return;
+			}
+
+			// Extract region code from config (format: "Display Name / code")
+			var regionCode = config.region;
+			if (regionCode && regionCode.indexOf(' / ') !== -1) {
+				var parts = regionCode.split(' / ');
+				regionCode = parts[parts.length - 1];
+			}
+
+			var baseUrl = regionUrls[regionCode];
+			if (!baseUrl) {
+				$.data = 'Invalid region selected: ' + regionCode;
+				if (config.debugRequests) {
+					console.log(new Date().toISOString() + ' [genesys_oauth] - Invalid region code:', regionCode);
+					console.log(new Date().toISOString() + ' [genesys_oauth] - Available regions:', Object.keys(regionUrls).join(', '));
+				}
+				$.send('error');
+				$.destroy();
+				return;
+			}
+
+			// Create Base64 encoded authorization
+			var credentials = resolvedClientId + ':' + resolvedClientSecret;
+			var base64Credentials = Buffer.from(credentials).toString('base64');
+
+			var opt = {};
+			opt.method = 'POST';
+			opt.url = baseUrl + '/oauth/token?grant_type=client_credentials';
+			opt.headers = {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				'Authorization': 'Basic ' + base64Credentials
+			};
+
+			// Apply timeout and limit from config (use defaults if not set)
+			opt.timeout = config.timeout || 10000;
+			opt.limit = config.limit || 512000;
+
+			// Handle SSL ignore
+			if (config.ignoreSSL && baseUrl.startsWith('https')) {
+				opt.insecure = true;
+			}
+
+			// Debug logging for requests
+			if (config.debugRequests) {
+				var debugInfo = {
+					url: opt.url,
+					method: opt.method,
+					headers: {
+						'Content-Type': opt.headers['Content-Type'],
+						'Authorization': 'Basic ******'
+					},
+					region: regionCode,
+					baseUrl: baseUrl,
+					timeout: opt.timeout,
+					limit: opt.limit
+				};
+
+				// Log to server console with timestamp
+				console.log(new Date().toISOString() + ' [genesys_oauth] - Request Details:', JSON.stringify(debugInfo, null, 2));
+
+				// Show in component status
+				instance.status('Request: ' + opt.method + ' to ' + regionCode, 5000);
+
+				// Also send debug info to output
+				if (!$.data || typeof $.data !== 'object') {
+					$.data = {};
+				}
+				$.data.debug_request = debugInfo;
+			}
+
+			// Function to make the request with unified timeout behavior
+			var attemptNumber = 0;
+			var maxAttempts = (config.retryAttempts || 0) + 1; // Add 1 for the initial attempt
+			var has429Retry = false; // Track if we've already retried for 429
+
+			var makeRequest = function() {
+				attemptNumber++;
+
+				if (config.debugRequests && attemptNumber > 1) {
+					console.log(new Date().toISOString() + ' [genesys_oauth] - Retry attempt ' + (attemptNumber - 1) + ' of ' + config.retryAttempts);
+					instance.status('Retry ' + (attemptNumber - 1) + '/' + config.retryAttempts, 3000);
+				}
+
+				var attemptStart = Date.now();
+
+				opt.callback = function(err, response) {
+					var elapsed = Date.now() - attemptStart;
+					var remaining = Math.max(config.timeout - elapsed, 0);
+
+					var scheduleRetry = function() {
+						if (attemptNumber < maxAttempts) {
+							if (config.debugRequests || config.debugResponses) {
+								console.log(new Date().toISOString() + ' [genesys_oauth] - Retrying after ' + remaining + 'ms (unified timeout)');
+							}
+							setTimeout(makeRequest, remaining);
+						} else {
+							$.destroy();
+						}
+					};
+
+					// Network/timeout or request error
+					if (err) {
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [genesys_oauth] - Request Error (attempt ' + attemptNumber + '): ' + err);
+						}
+						if (attemptNumber < maxAttempts) {
+							scheduleRetry();
+							return;
+						}
+						$.data = err + '';
+						$.send('error');
+						$.destroy();
+						return;
+					}
+
+					// --- Debug response logging ---
+					if (config.debugResponses) {
+						console.log(new Date().toISOString() + ' [genesys_oauth] - Response Status:', response.status);
+						console.log(new Date().toISOString() + ' [genesys_oauth] - Response Headers:', JSON.stringify(response.headers, null, 2));
+						console.log(new Date().toISOString() + ' [genesys_oauth] - Response Body:', JSON.stringify(response.body, null, 2));
+						instance.status('Response: HTTP ' + response.status, 5000);
+					}
+
+					if (response.status === 200) {
+						var body = response.body;
+						if (typeof body === 'string') {
+							try { body = JSON.parse(body); } catch { }
+						}
+						$.data = body;
+						$.send('output');
+						$.destroy();
+						return;
+					}
+
+					// --- Handle 429 Rate Limit with retry-after header ---
+					if (response.status === 429 && !has429Retry) {
+						has429Retry = true; // Mark that we've attempted the 429 retry
+						
+						// Extract retry-after header (in seconds)
+						var retryAfter = 60; // Default to 60 seconds
+						if (response.headers && response.headers['retry-after']) {
+							var headerValue = parseInt(response.headers['retry-after'], 10);
+							if (!isNaN(headerValue) && headerValue > 0) {
+								retryAfter = headerValue;
+							}
+						}
+						
+						var retryAfterMs = retryAfter * 1000; // Convert to milliseconds
+						
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [genesys_oauth] - HTTP 429 Rate Limit -> retrying once in ' + retryAfter + ' seconds (' + retryAfterMs + 'ms)');
+						}
+						
+						setTimeout(makeRequest, retryAfterMs);
+						return;
+					}
+
+					// --- Handle 5xx retryable errors ---
+					if (response.status >= 500 && response.status < 600 && attemptNumber < maxAttempts) {
+						if (config.debugRequests || config.debugResponses) {
+							console.log(new Date().toISOString() + ' [genesys_oauth] - HTTP ' + response.status + ' -> retrying in ' + remaining + 'ms (unified timeout)');
+						}
+						scheduleRetry();
+						return;
+					}
+
+					// --- Non-retryable or final error ---
+					var errorBody = response.body;
+					if (typeof errorBody === 'string') {
+						try { errorBody = JSON.parse(errorBody); } catch { }
+					}
+					$.data = {
+						Response: {
+							Status: response.status,
+							Headers: response.headers,
+							Body: errorBody || ('HTTP ' + response.status)
+						}
+					};
+					$.send('error');
+					$.destroy();
+				};
+
+				REQUEST(opt);
+			};
+
+			// Start the first request
+			makeRequest();
+		};
+
+	};
+
+</script>
+
+<settings>
+
+	<script>
+		// Region options
+		var regions = [
+			'Europe (Frankfurt) / eu-central-1',
+			'Europe (Zurich) / eu-central-2',
+			'Europe (Ireland) / eu-west-1',
+			'Europe (London) / eu-west-2',
+			'Asia Pacific (Mumbai) / ap-south-1',
+			'Asia Pacific (Tokyo) / ap-northeast-1',
+			'Asia Pacific (Seoul) / ap-northeast-2',
+			'Asia Pacific (Osaka) / ap-northeast-3',
+			'Asia Pacific (Sydney) / ap-southeast-2',
+			'Middle East (UAE) / me-central-1',
+			'Canada (Central) / ca-central-1',
+			'US East (Virginia) / us-east-1',
+			'US East 2 (Ohio) / us-east-2',
+			'US West (Oregon) / us-west-2',
+			'South America (São Paulo) / sa-east-1'
+		];
+	</script>
+
+	<div class="padding">
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Authorization Configuration</b></div>
+			</div>
+		</div>
+
+		<hr class="nmt nmb" />
+
+		<br />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<ui-component name="input" path="?.authType" config="required:true;dirsource:client_credentials|Client Credentials Grant,implicit|Implicit Grant,authorization_code|Authorization Code Grant,saml2|SAML2 Bearer Grant,pkce|PKCE Grant">Authorization Type</ui-component>
+			</div>
+		</div>
+
+		<div data-bind="?.authType__show:value !== 'client_credentials'" class="hidden">
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="message message-alert">
+						<i class="ti ti-alert-triangle"></i>
+						<strong>Option is under construction</strong>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div data-bind="?.authType__show:value === 'client_credentials'" class="hidden">
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Client Credentials Grant Settings</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-6 m">
+					<ui-component name="input" path="?.region" config="required:true;dirsource:regions">PureCloud region</ui-component>
+				</div>
+			</div>
+
+			<div class="row">
+				<div class="col-md-6 m">
+					<ui-component name="input" path="?.clientId" config="required:true;placeholder:Enter Client ID;type:password;icon2:ti ti-eye">Client ID</ui-component>
+				</div>
+				<div class="col-md-6 m">
+					<ui-component name="input" path="?.clientSecret" config="required:true;placeholder:Enter Client Secret;type:password;icon2:ti ti-eye">Client Secret</ui-component>
+				</div>
+			</div>
+
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Additional Options</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-3 m">
+					<ui-component name="input" path="?.limit" config="type:number">Max. size</ui-component>
+					<div class="help"><i class="ti ti-calculator"></i><ui-bind path="?.limit" config="text:(value||0).filesize()"></ui-bind><br />Response max. size <b>in bytes</b></div>
+				</div>
+				<div class="col-md-3 m">
+					<ui-component name="input" path="?.timeout" config="type:number">Timeout</ui-component>
+					<div class="help"><i class="ti ti-clock"></i><ui-bind path="?.timeout" config="text:((value/1000||0)) + ' sec'"></ui-bind><br />Timeout <b>in milliseconds</b></div>
+				</div>
+				<div class="col-md-3 m">
+					<ui-component name="input" path="?.retryAttempts" config="type:number;min:0;increment:1">Retry attempts</ui-component>
+				</div>
+				<div class="col-md-3 m additional-options-ssl">
+					<div class="ssl-checkbox-wrapper">
+						<ui-component name="input" path="?.ignoreSSL" config="type:checkbox">Ignore SSL</ui-component>
+						<div class="help ssl-help">Skip SSL certificate validation</div>
+					</div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb section-divider" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-12 m">
+					<div class="help section-header"><b>Component Debug</b></div>
+				</div>
+			</div>
+
+			<hr class="nmt nmb" />
+
+			<br />
+
+			<div class="row">
+				<div class="col-md-6 m">
+					<ui-component name="input" path="?.debugRequests" config="type:checkbox">Requests</ui-component>
+					<ui-component name="input" path="?.debugResponses" config="type:checkbox">Responses</ui-component>
+				</div>
+				<div class="col-md-6 m">
+					<div class="help" style="margin-top: 0;">- Debug does not send data in browser F12 console log<br>- Debug prints data into the server side NodeJS log or 'docker log' output</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #e64d3c !important; }
+	.CLASS header { background-color: #e64d3c; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Input field styling for text and password inputs */
+	#flow_settings input[type="text"],
+	#flow_settings input[type="password"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[type="text"],
+	.ui-dark #flow_settings input[type="password"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Input field styling for number inputs */
+	#flow_settings input[type="number"] {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark #flow_settings input[type="number"] {
+		color: #6fa8dc !important;
+	}
+
+	/* Additional Options section specific styling */
+	.additional-options-ssl {
+		display: flex;
+		align-items: flex-start;
+		margin-top: 22px;
+	}
+
+	.ssl-checkbox-wrapper {
+		margin-top: 0;
+		padding-top: 0;
+	}
+
+	.ssl-checkbox-wrapper .ui-input {
+		margin-bottom: 5px;
+	}
+
+	.ssl-checkbox-wrapper .ssl-help {
+		margin-top: 0;
+		font-size: 11px;
+		line-height: 1.3;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+# Genesys OAuth
+This component handles OAuth authentication with Genesys PureCloud platform.
+
+## Dynamic Value Templates
+The Client ID and Client Secret fields support template syntax to access global variables and input data:
+
+### Template Syntax:
+- **Global variables**: `{{ $FLOW_VARS.key }}` → reads from global variables (e.g., `{{ $FLOW_VARS.client_id }}`)
+- **Dynamic path**: `{{ $data.key1 }}` → reads from `$.data.key1`
+- **Nested path**: `{{ $data.key2.key21 }}` → reads from `$.data.key2.key21`
+- **Static value**: `SomeText` → outputs `"SomeText"`
+
+### Examples:
+- Client ID: `{{ $FLOW_VARS.client_id }}`
+- Client Secret: `{{ $FLOW_VARS.genesys_client_secret }}`
+- From data: `{{ $data.credentials.clientId }}`
+
+### Math Operations:
+- `{{ $data.key4 + 5 }}` → addition
+- `{{ $data.key4 - 3 }}` → subtraction
+- `{{ $data.key4 * 2 }}` → multiplication
+- `{{ $data.key4 / 2 }}` → division
+
+### Text Concatenation:
+- `{{ $FLOW_VARS.prefix }}_test` → combines global variable with text
+- `prefix_{{ $data.key1 }}_suffix` → `"prefix_value1_suffix"`
+
+### Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $FLOW_VARS.nonexistent }}` → variable doesn't exist
+- `{{ $data.nonexistent }}` → path doesn't exist
+
+## Additional Options
+- **Timeout**: Request timeout in milliseconds (default: 10000)
+- **Max. size**: Response maximum size in bytes (default: 512000)
+- **Retry attempts**: Number of retries for 5xx errors (default: 0)
+- **429 Rate Limit Handling**: Automatic single retry using `retry-after` header (ignores configured timeout and retry settings)
+
+## Outputs
+- **Output**: Success response (HTTP 200) with token data
+- **Error**: Error response for failed authentication or other errors
+
+## Behavior
+- Component is triggered by any input request
+- Resolves templates in Client ID and Client Secret (supports `$FLOW_VARS` and `$data`)
+- Performs HTTP POST request to the selected region's OAuth endpoint
+- Applies timeout and size limit settings
+- Sends successful responses to the output
+- Sends error responses to the error output
+- Automatically parses JSON responses
+- **429 Rate Limit**: Automatically retries once after the duration specified in `retry-after` header (in seconds)
+- **5xx Errors**: Retries based on configured retry attempts using the unified timeout behavior
+- Debug logging can be enabled for requests and responses
+</readme>

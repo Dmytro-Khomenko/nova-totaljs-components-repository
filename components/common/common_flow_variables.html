@@ -1,0 +1,526 @@
+<script total>
+
+	exports.id = 'flow_variables';
+	exports.name = 'Flow Variables';
+	exports.group = 'Common';
+	exports.icon = 'ti ti-variables';
+	exports.author = 'Total.js';
+	exports.version = '2.1.2';
+	exports.config = { forwardInputData: false, rows: [] };
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }];
+
+	exports.make = function(instance, config) {
+
+		var resolvePathOrValue = function(expr, data) {
+			expr = expr.trim();
+			if (expr.startsWith('$data.')) {
+				var path = expr.substring(6);
+				var value = U.get(data, path);
+				return value !== undefined ? value : null;
+			}
+			var num = parseFloat(expr);
+			if (!isNaN(num) && expr === num.toString()) {
+				return num;
+			}
+			return expr;
+		};
+
+		var resolveValue = function(valueStr, data) {
+			if (typeof valueStr !== 'string') {
+				return valueStr;
+			}
+
+			// Handle special case where user provides {{ $data }} directly
+			if (valueStr.trim() === '{{ $data }}') {
+				try {
+					return JSON.stringify(data);
+				} catch (e) {
+					return '<bad expression>';
+				}
+			}
+
+			var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+
+				var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+				if (mathMatch) {
+					var left = resolvePathOrValue(mathMatch[1], data);
+					var operator = mathMatch[2];
+					var right = resolvePathOrValue(mathMatch[3], data);
+
+					if (left === null || right === null) {
+						return '<bad expression>';
+					}
+
+					var leftNum = parseFloat(left);
+					var rightNum = parseFloat(right);
+
+					if (!isNaN(leftNum) && !isNaN(rightNum)) {
+						switch (operator) {
+							case '+': return leftNum + rightNum;
+							case '-': return leftNum - rightNum;
+							case '*': return leftNum * rightNum;
+							case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+						}
+					}
+					return '<bad expression>';
+				} else {
+					if (expression === '$data') {
+						return JSON.stringify(data);
+					}
+					var resolved = resolvePathOrValue(expression, data);
+					if (resolved === null) {
+						return '<bad expression>';
+					}
+					// If resolved value is an object or array, stringify it for proper handling
+					if (typeof resolved === 'object' && resolved !== null) {
+						return JSON.stringify(resolved);
+					}
+					return resolved !== expression ? resolved : '<bad expression>';
+				}
+			});
+
+			return result;
+		};
+
+		instance.message = function($) {
+
+			function buildOutput(data, config, variablesResponse) {
+				if (config.forwardInputData) {
+					return {
+						forwarded_data: data,
+						flow_variables_response: variablesResponse
+					};
+				}
+				return {
+					flow_variables_response: variablesResponse
+				};
+			}
+
+			var data = $.data || {};
+
+			if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+				data = {};
+			}
+
+			var results = {};
+			var messages = [];
+
+			// Process all rows
+			if (config.rows && Array.isArray(config.rows)) {
+				for (var i = 0; i < config.rows.length; i++) {
+					var row = config.rows[i];
+					var action = row.action || 'GET';
+					var varnameRaw = row.varname || '';
+
+					// Skip empty variable names
+					if (!varnameRaw || varnameRaw.trim() === '') {
+						continue;
+					}
+
+					var varname = resolveValue(varnameRaw.trim(), data);
+
+					switch (action) {
+						case 'GET':
+							// Get variable value from flow variables
+							var value = instance.main.variables[varname];
+							var convertedValue = value !== undefined ? value : null;
+
+							// Apply type conversion
+							var vartype = row.vartype || 'string';
+							if (convertedValue !== null) {
+								switch (vartype) {
+									case 'number':
+										var num = parseFloat(convertedValue);
+										convertedValue = !isNaN(num) ? num : convertedValue;
+										break;
+									case 'boolean':
+										if (typeof convertedValue === 'string') {
+											var lower = convertedValue.toLowerCase();
+											convertedValue = lower === 'true' || lower === '1' || lower === 'yes';
+										} else {
+											convertedValue = !!convertedValue;
+										}
+										break;
+									case 'string':
+									default:
+										convertedValue = String(convertedValue);
+										break;
+								}
+							}
+
+							results[varname] = convertedValue;
+							break;
+
+						case 'SET':
+							// Set or update variable
+							var varvalue = resolveValue(row.varvalue || '', data);
+							instance.main.variables[varname] = varvalue;
+							messages.push('Variable ' + varname + ' is updated');
+							break;
+
+						case 'DEL':
+							// Delete variable
+							if (instance.main.variables[varname] !== undefined) {
+								delete instance.main.variables[varname];
+							}
+							messages.push('Variable ' + varname + ' is deleted');
+							break;
+					}
+				}
+			}
+
+			// Notify the system that variables have changed (for SET and DEL operations)
+			var hasModifications = false;
+			if (config.rows && Array.isArray(config.rows)) {
+				for (var i = 0; i < config.rows.length; i++) {
+					var action = config.rows[i].action || 'GET';
+					if (action === 'SET' || action === 'DEL') {
+						hasModifications = true;
+						break;
+					}
+				}
+			}
+			if (hasModifications) {
+				instance.newvariables(instance.main.variables);
+			}
+
+			// Build response
+			var response = {};
+
+			// Add GET results if any
+			for (var key in results) {
+				response[key] = results[key];
+			}
+
+			// Add messages if any
+			if (messages.length > 0) {
+				response.result = messages.join('; ');
+			}
+
+			$.data = buildOutput(data, config, response);
+			$.send('output');
+			$.destroy();
+		};
+
+		instance.configure = function() {
+			// Configuration changed
+		};
+
+		instance.configure();
+
+	};
+
+</script>
+
+<script>
+	TOUCH(function(exports, reinit) {
+
+		exports.settings = function(meta) {
+			// Initialize rows array if empty
+			if (!meta.config.rows || !meta.config.rows.length) {
+				// Optionally add one default row
+			}
+		};
+
+	});
+
+	// Add row function
+	window.flowvars_addrow = function(el) {
+		var scope = el.scope();
+		var config = scope.get();
+
+		if (!config.rows) {
+			config.rows = [];
+		}
+
+		// Create new row with unique id
+		var newRow = {
+			id: Date.now().toString(36) + Math.random().toString(36).substring(2),
+			action: 'GET',
+			varname: '',
+			varvalue: '',
+			vartype: 'string'
+		};
+
+		config.rows.push(newRow);
+		scope.set('rows', config.rows);
+		scope.change('*');
+	};
+
+	// Remove row function
+	window.flowvars_removerow = function(el) {
+		var scope = el.scope();
+		var config = scope.get();
+		var rowId = el.closest('[data-id]').attr('data-id');
+
+		if (config.rows) {
+			// Find and remove the row with matching id
+			for (var i = 0; i < config.rows.length; i++) {
+				if (config.rows[i].id === rowId) {
+					config.rows.splice(i, 1);
+					break;
+				}
+			}
+
+			scope.set('rows', config.rows);
+			scope.change('*');
+		}
+	};
+</script>
+
+<settings>
+	<div class="padding">
+		<div class="row forward-banner" style="background-color: #f0f0f0; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; align-items: center;">
+			<div class="col-md-12 m" style="display: flex; align-items: center; margin-bottom: 0;">
+				<ui-component name="input" path="?.forwardInputData" config="type:checkbox">Forward input data</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help section-header"><b>Variables Management</b></div>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help">Variable Name and Variable Value fields support template syntax: <code>{{ $data.key }}</code></div>
+			</div>
+		</div>
+
+		<hr />
+
+		<div class="row">
+			<div class="col-md-12 m">
+				<button class="exec button button-small" data-exec="flowvars_addrow"><i class="ti ti-plus-circle" style="color: #28a745;"></i>Add variable</button>
+			</div>
+		</div>
+		<hr />
+		<ui-bind path="?.rows" config="template:div.flowvars-row --> data-id;show:value && value.length" class="flowvars-rows">
+			<script type="text/html">
+				{{ foreach row in value }}
+				<div class="flowvars-row" data-id="{{ row.id }}">
+					<div class="row flowvars-row-container">
+						<div class="flowvars-label">
+							<label>Action:</label>
+						</div>
+						<div class="flowvars-field flowvars-field-action">
+							<ui-component name="input" path="?.rows[{{ $index }}].action" config="dirsource:GET|GET,SET|SET,DEL|DEL;required:true"></ui-component>
+						</div>
+						<div class="flowvars-label">
+							<label>Variable:</label>
+						</div>
+						<div class="flowvars-field flowvars-field-varname">
+							<ui-component name="input" path="?.rows[{{ $index }}].varname" config="placeholder:varName or {{ $data.varName }}"></ui-component>
+						</div>
+						<div class="flowvars-label" data-bind="?.rows[{{ $index }}].action__show:value==='SET'">
+							<label>Value:</label>
+						</div>
+						<div class="flowvars-field flowvars-field-varvalue" data-bind="?.rows[{{ $index }}].action__show:value==='SET'">
+							<ui-component name="input" path="?.rows[{{ $index }}].varvalue" config="placeholder:value or {{ $data.value }}"></ui-component>
+						</div>
+						<div class="flowvars-label" data-bind="?.rows[{{ $index }}].action__show:value==='GET'">
+							<label>Type:</label>
+						</div>
+						<div class="flowvars-field flowvars-field-vartype" data-bind="?.rows[{{ $index }}].action__show:value==='GET'">
+							<ui-component name="input" path="?.rows[{{ $index }}].vartype" config="dirsource:string|String,number|Number,boolean|Boolean"></ui-component>
+						</div>
+						<div class="flowvars-field-remove">
+							<button class="exec flowvars-remove-btn" data-exec="flowvars_removerow"><i class="ti ti-trash"></i></button>
+						</div>
+					</div>
+				</div>
+				{{ end }}
+			</script>
+		</ui-bind>
+		<div data-bind="?.rows__hide:value && value.length" class="hidden">
+			<div class="center gray padding">No variables added yet. Click "Add variable" to create your first variable operation.</div>
+		</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS header { background-color: #9e9e9e; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	/* Dynamic rows styling */
+	.flowvars-rows { margin-top: 15px; }
+	.flowvars-row { margin-bottom: 8px; }
+
+	.flowvars-row-container {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		margin-bottom: 0 !important;
+		flex-wrap: wrap;
+	}
+
+	.flowvars-label {
+		text-align: right;
+		padding-right: 3px;
+		white-space: nowrap;
+		min-width: 60px;
+	}
+
+	.flowvars-label label {
+		margin-bottom: 0 !important;
+		line-height: 32px;
+		font-size: 13px;
+	}
+
+	.flowvars-field {
+		flex: 1;
+	}
+
+	.flowvars-field-action {
+		flex: 0 0 100px;
+	}
+
+	.flowvars-field-varname {
+		flex: 0 0 200px;
+	}
+
+	.flowvars-field-varvalue {
+		flex: 0 0 200px;
+	}
+
+	.flowvars-field-vartype {
+		flex: 0 0 120px;
+	}
+
+	.flowvars-field-remove {
+		flex: 0 0 auto;
+	}
+
+	.flowvars-remove-btn {
+		background-color: #dc3545;
+		border: none;
+		color: white;
+		cursor: pointer;
+		padding: 8px 12px;
+		border-radius: 4px;
+		height: 32px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		transition: background-color 0.2s;
+	}
+
+	.flowvars-remove-btn:hover {
+		background-color: #c82333;
+	}
+
+	.flowvars-remove-btn i {
+		font-size: 14px;
+	}
+
+	/* Input field styling for Variable Name and Value */
+	.flowvars-field-varname input,
+	.flowvars-field-varvalue input {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+
+	.ui-dark .flowvars-field-varname input,
+	.ui-dark .flowvars-field-varvalue input {
+		color: #6fa8dc !important;
+	}
+
+	/* Forward banner styling */
+	#flow_settings .forward-banner .m {
+		margin-bottom: 0 !important;
+	}
+
+	.ui-dark .forward-banner {
+		background-color: #2a2a2a !important;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+# Flow Variables
+
+This component manages Flow variables with GET, SET, and DEL operations. Supports multiple operations in a single execution.
+
+
+## Inputs and Outputs
+- **Input**: Triggers the variable operations (accepts any data)
+- **Output**: Returns combined results in JSON format, always wrapped in `flow_variables_response`
+
+
+## Variables Management
+You can add multiple variable operations that will be executed sequentially:
+- **Action**: Operation to perform (GET, SET, DEL)
+- **Variable**: Name of the flow variable (mandatory, supports templates)
+- **Value**: Value to set (visible only for SET action, supports templates)
+- **Type**: Return type for GET operation (visible only for GET action: String, Number, Boolean)
+
+
+## Template Support
+
+Both **Variable** and **Value** fields support dynamic templates with `{{ $data.* }}` syntax.
+
+### Template Syntax:
+- **Static value**: `myVar` → outputs `"myVar"`
+- **Dynamic path**: `{{ $data.keyName }}` → reads from `$.data.keyName`
+- **Nested path**: `{{ $data.nested.value }}` → reads from `$.data.nested.value`
+- **Array path**: `{{ $data.items[0].name }}` → reads from `$.data.items[0].name`
+- **Object/Array**: `{{ $data.body }}` → automatically converted to JSON string
+
+### Math Operations:
+- `{{ $data.value + 5 }}` → addition
+- `{{ $data.value - 3 }}` → subtraction
+- `{{ $data.value * 2 }}` → multiplication
+- `{{ $data.value / 2 }}` → division
+
+### Text Concatenation:
+- `{{ $data.prefix }}_key` → `"value_key"`
+- `prefix_{{ $data.value }}_suffix` → `"prefix_value_suffix"`
+
+### Error Handling:
+Unsupported expressions return `"<bad expression>"`:
+- `{{ $data.nonexistent }}` → path doesn't exist
+- `{{ $data.text + 5 }}` → cannot add number to string
+- `{{ $data.nested.invalid }}` → invalid nested path
+
+
+## Multiple Operations
+
+The component processes all configured rows sequentially. You can mix GET, SET, and DEL operations in a single execution:
+
+**Example Configuration**:
+1. Row 1: GET "counter" as Number
+2. Row 2: SET "lastAccess" to "{{ $data.timestamp }}"
+3. Row 3: DEL "tempData"
+
+
+## Behavior Notes
+- Variables are stored at the Flow level and persist across component executions
+- Variable names are case-sensitive
+- All responses are wrapped in `flow_variables_response` object
+- GET operation applies type conversion to returned values based on the selected Type
+- Number conversion uses `parseFloat()` - if conversion fails, original value is returned
+- Boolean conversion for strings recognizes: 'true', '1', 'yes' (case-insensitive) as `true`
+- Template expressions are resolved before operations are performed
+- All rows are processed sequentially in the order they appear
+- Operations that modify variables (SET/DEL) trigger `instance.newvariables()` to notify the system
+- When "Forward input data" is enabled, the response includes both `forwarded_data` and `flow_variables_response`
+- Forwarding is useful for passing data through the component while also performing variable operations
+- This component operates on `instance.main.variables` which are Flow-level variables
+
+For more information about Flow variables, see:
+https://docs.totaljs.com/flowstream/d27dc002rl50c/#d27e2001rl51c
+</readme>
