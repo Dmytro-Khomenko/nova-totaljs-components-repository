@@ -5,7 +5,7 @@
 	exports.group = 'Databases';
 	exports.icon = 'ti ti-server';
 	exports.author = 'Total.js';
-	exports.version = '1.4.0';
+	exports.version = '1.4.1';
 	exports.config = {
 		hostname: '{{ $FLOW_VARS.elasticsearch_host }}',
 		port: '{{ $FLOW_VARS.elasticsearch_port }}',
@@ -333,8 +333,9 @@
 						opt.bulkBodyCompiled = instance.$_dataObjArrayCompiled || '(no compiled body)';
 					} else {
 
-						// Replace <bad expression> placeholders to keep valid JSON
-						resolvedBody = resolvedBody.replace(/<bad expression>/g, '"<bad expression>"');
+						// DON'T replace <bad expression> in BULK operations
+						// The data is already valid JSON from {{ $data(objArray) }}
+						// The <bad expression> text is just part of the actual data content, not a template placeholder
 
 						// Helper: extract full JSON objects even if pretty-formatted
 						function extractJsonObjects(str) {
@@ -547,7 +548,7 @@
 				opt.insecure = true;
 			}
 
-			// Debug logging for requests 
+			// Debug logging for requests
 			if (config.debugRequests) {
 				var debugInfo = {
 					url: opt.url,
@@ -733,8 +734,8 @@
 				REQUEST(opt);
 			};
 
-			// Start the first request
 			makeRequest();
+
 		};
 
 	};
@@ -889,7 +890,7 @@
 						{ "_id": "1", "field1": "value1", "field2": 123 }<br>
 						{ "_id": "2", "field1": "value1", "field2": 456 }
 						</div>
-						
+
 						<div data-bind="?.__show:value.operation === 'BULK Actions' && value.bulkAction === 'Create'" class="hidden ui-example-text" style="height: 288px;">
 						For inputs like ( data: [ {}, {}] ) use:<br>
 						{{ $data(objArray) }}<br>
@@ -903,7 +904,7 @@
 						{ "_id": "1", "field1": "value1", "field2": 123 }<br>
 						{ "_id": "2", "field1": "value1", "field2": 456 }
 						</div>
-						
+
 						<div data-bind="?.__show:value.operation === 'BULK Actions' && value.bulkAction === 'Update'" class="hidden ui-example-text" style="height: 288px;">
 						For inputs like ( data: [ {}, {}] ) use:<br>
 						{{ $data(objArray) }}<br>
@@ -912,7 +913,7 @@
 						{ "_id": "2", "field1": "value1", "field2": 456 }<br>
 						{ "_id": "3", "field1": "value1", "field2": 789 }
 						</div>
-						
+
 						<div data-bind="?.__show:value.operation === 'BULK Actions' && value.bulkAction === 'Delete'" class="hidden ui-example-text" style="height: 288px;">
 						For inputs like ( data: [ {}, {}] ) use:<br>
 						{{ $data(objArray) }}<br>
@@ -1174,10 +1175,10 @@
 <readme>
 	# Elasticsearch [Docs]
 	This component provides integration with Elasticsearch for document operations via REST API.
-	
+
 
 	## Configuration
-	
+
 	### Request settings
 	- **Operation:** Select the Elasticsearch operation to perform
 		- **Get:** Retrieve a single document by ID (requires Doc Id)
@@ -1193,22 +1194,22 @@
 	- **Doc Id:** Document ID (required for Get, Exists, Index, Delete, Update operations; hidden for Get many, Search by query, Update by query, Delete by query operations; supports templates)
 	- **Query Parameters:** Additional URL query parameters as key-value pairs
 	- **Headers:** Custom HTTP headers as key-value pairs
-	
+
 	### Request body
 	- **Body:** JSON body for operations that support it (Index, Update, Get many, Search by query, Update by query, Delete by query)
 	- **Example:** Dynamic visual reference showing operation-specific examples and template usage (changes based on selected operation)
-	
+
 	### Additional Options
 	- **Max. size:** Response maximum size in bytes (default: 512000)
 	- **Timeout:** Request timeout in milliseconds (default: 10000)
 	- **Retry attempts:** Number of retry attempts if request fails (default: 0). If set to a value greater than 0, the component will retry the request after waiting for the timeout duration between each attempt.
 	- **Ignore SSL:** Skip SSL certificate validation for HTTPS connections
-	
+
 
 	## Template Support
-	
+
 	All Instance settings, Request settings fields (Index, Doc Id, Query Parameters, Headers), and Request body support template syntax:
-	
+
 	### Template Syntax:
 	- **Flow variables:** `{{ $FLOW_VARS.variable_name }}` → reads from flow variables
 	- **Full payload:** `{{ $data }}` → entire input data as JSON string
@@ -1218,7 +1219,7 @@
 	### Advanced Template Examples:
 
 	**Using {{ $data(objArray) }} for bulk operations:**
-	
+
 	Input data (array of objects):
 	```json
 	{
@@ -1228,22 +1229,22 @@
 		]
 	}
 	```
-	
+
 	Body with `{{ $data(objArray) }}`:
-	
+
 	Results in:
 	```json
 	{ "field1": "value1", "field2": 123 },
 	{ "field1": "value2", "field2": 456 }
 	```
-	
+
 
 	## Outputs
 	- **Output:** Successful response (HTTP 2xx) with parsed JSON body
 		- For Exists operation: `{ exists: true }` or `{ exists: false }`
 	- **Error:** Error response with status, headers, and body details
-	
-	
+
+
 	## Behavior
 	- Component is triggered by any input request
 	- Resolves all template expressions before executing the request
