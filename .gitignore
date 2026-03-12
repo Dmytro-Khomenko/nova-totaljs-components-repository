@@ -33,6 +33,7 @@ $RECYCLE.BIN/
 .gitignore
 .claudeignore
 .cursorignore
+CLAUDE.md
 
 # Backup and Temp files
 *~
