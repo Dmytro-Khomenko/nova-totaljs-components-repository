@@ -1,0 +1,580 @@
+<script total>
+
+    var COMPONENT_NAME = 'Jambonz [WS] prompt';
+
+    exports.id = 'jambonz_ws_prompt';
+    exports.name = COMPONENT_NAME;
+    exports.group = 'Jambonz';
+    exports.icon = 'ti ti-atom';
+    exports.author = 'Demon';
+    exports.version = '3.1.2';
+    exports.config = {
+        audioType: 'say',
+        prompt: '',
+        vendor: '',
+        language: '',
+        voice: '',
+        loop: 1,
+        audioUrl: '',
+        playTimeout: 0,
+        playLoops: 1,
+        playOffset: 0,
+        playActionHook: '/player',
+        debug_enabled: false,
+        debug_nameid: true,
+        debug_to_output: false,
+        debug_timestamp: true,
+        debug_errors_to_output: false,
+        debug_timezone: 'UTC',
+        debug_json: false
+    };
+    exports.inputs = [{ id: 'input', name: 'Input' }];
+    exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
+
+    exports.make = function(instance, config) {
+
+        var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+        var getTimestamp = function() {
+            try {
+                var now = new Date();
+                var timezone = config.debug_timezone || 'UTC';
+
+                if (timezone.match(/^GMT[+-]\d+$/)) {
+                    var offset = parseInt(timezone.substring(3));
+                    var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    var adjustedTime = new Date(utcTime + (offset * 3600000));
+
+                    var year = adjustedTime.getUTCFullYear();
+                    var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+                    var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+                    var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+                    var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+                    var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+                    var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+
+                    return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+                }
+
+                var formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    fractionalSecondDigits: 3,
+                    hour12: false
+                });
+
+                var parts = formatter.formatToParts(now);
+                var dateParts = {};
+
+                for (var part of parts) {
+                    dateParts[part.type] = part.value;
+                }
+
+                return dateParts.year + '-' + dateParts.month + '-' + dateParts.day + ' ' +
+                    dateParts.hour + ':' + dateParts.minute + ':' + dateParts.second + '.' +
+                    dateParts.fractionalSecond + '000';
+            } catch (e) {
+                var d = new Date();
+                var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+                return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+            }
+        };
+
+        var logMessage = function(level, message, isError) {
+            if (!config.debug_enabled) return;
+
+            var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+            var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+            var output;
+
+            if (config.debug_json) {
+                var entry = {};
+                if (config.debug_timestamp) entry.time = getTimestamp();
+                if (config.debug_nameid) {
+                    entry.component = COMPONENT_NAME;
+                    entry.nodeId = '[' + instance.id + ']';
+                }
+                entry.level = level;
+                entry.message = message;
+                output = JSON.stringify(entry);
+            } else {
+                var parts = [];
+                if (config.debug_timestamp) parts.push(getTimestamp());
+                if (config.debug_nameid) parts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+                parts.push(paddedLevel);
+                parts.push(message);
+                output = parts.join(' ');
+            }
+
+            if (sendToOutput) {
+                try {
+                    var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+                    m.send('debug');
+                } catch (e) {}
+            } else {
+                console.log(output);
+            }
+        };
+
+        var resolvePathOrValue = function(expr, data) {
+            expr = expr.trim();
+            if (expr.startsWith('$data.')) {
+                var path = expr.substring(6);
+                var value = U.get(data, path);
+                return value !== undefined ? value : null;
+            }
+            // Try to parse as number
+            var num = parseFloat(expr);
+            if (!isNaN(num) && expr === num.toString()) {
+                return num;
+            }
+            return expr;
+        };
+
+        var resolveValue = function(valueStr, data) {
+            if (typeof valueStr !== 'string') {
+                return valueStr;
+            }
+
+            // Replace all template patterns {{ $data.* }} or {{ expression }}
+            var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+                expression = expression.trim();
+
+                // Check if it contains math operators (+, -, *, /)
+                var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+                if (mathMatch) {
+                    // It's a math expression
+                    var left = resolvePathOrValue(mathMatch[1], data);
+                    var operator = mathMatch[2];
+                    var right = resolvePathOrValue(mathMatch[3], data);
+
+                    // Check if path resolution failed
+                    if (left === null || right === null) {
+                        return '<bad expression>';
+                    }
+
+                    var leftNum = parseFloat(left);
+                    var rightNum = parseFloat(right);
+
+                    if (!isNaN(leftNum) && !isNaN(rightNum)) {
+                        switch (operator) {
+                            case '+': return leftNum + rightNum;
+                            case '-': return leftNum - rightNum;
+                            case '*': return leftNum * rightNum;
+                            case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+                        }
+                    }
+                    // Math operation failed (non-numeric values)
+                    return '<bad expression>';
+                } else {
+                    // It's a simple path
+                    var resolved = resolvePathOrValue(expression, data);
+                    if (resolved === null) {
+                        return '<bad expression>';
+                    }
+                    return resolved !== expression ? resolved : '<bad expression>';
+                }
+            });
+
+            return result;
+        };
+
+        // Footer display helpers
+        var computePlayDisplay = function(url) {
+            if (!url || !url.trim()) return 'Play: undefined';
+            var trimmed = url.trim();
+            if (trimmed.charAt(trimmed.length - 1) === '/') return 'Play: incorrect';
+            var lastSlash = trimmed.lastIndexOf('/');
+            var filename = lastSlash >= 0 ? trimmed.substring(lastSlash + 1) : trimmed;
+            if (!filename) return 'Play: incorrect';
+            return 'Play: ' + filename;
+        };
+
+        var computeSayDisplay = function(text) {
+            if (!text || !text.trim()) return 'Say: undefined';
+            return 'Say: ' + text.trim();
+        };
+
+        var computeFooterStatus = function() {
+            var cfg = (typeof instance.replace === 'function' && instance.replace(config)) || config;
+            var display = cfg.audioType === 'play'
+                ? computePlayDisplay(cfg.audioUrl)
+                : computeSayDisplay(cfg.prompt);
+            instance.status({ display: display });
+        };
+
+        instance.configure = function() {
+            setTimeout(computeFooterStatus, 0);
+        };
+
+        instance.message = function($) {
+
+            var data = $ && $.data ? $.data : {};
+
+            // Safeguard: if data is not an object (string, number, etc), treat as empty
+            if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+                data = {};
+            }
+
+            var nodeId = instance.id;
+            var flowPath = Array.isArray(data.flowPath) ? data.flowPath : null;
+            var stepNum = data.step_num;
+            var hasFlowPath = flowPath && flowPath.length > 0;
+            var hasStepNum = stepNum !== undefined && stepNum !== null;
+
+            logMessage('DEBUG', 'Received message (type: ' + (data.type || 'n/a') + ', msgid: ' + (data.msgid || 'n/a') + ', flowPath: ' + JSON.stringify(flowPath) + ', step_num: ' + stepNum + ')');
+
+            // Case C: flowPath contains current node ID — pass through
+            if (hasFlowPath && hasStepNum && flowPath.indexOf(nodeId) !== -1) {
+                logMessage('DEBUG', 'Pass-through — node already in flowPath');
+                $.send('output');
+                $.destroy();
+                return;
+            }
+
+            // Build audio verb based on audioType
+            var audioVerb;
+
+            if (config.audioType === 'play') {
+                // Play mode
+                var resolvedUrl = resolveValue(config.audioUrl || '', data);
+                audioVerb = { verb: 'play', url: resolvedUrl };
+                if (config.playTimeout > 0) audioVerb.timeoutSecs = config.playTimeout;
+                if (config.playLoops > 1) audioVerb.loop = config.playLoops;
+                if (config.playOffset > 0) audioVerb.seekOffset = config.playOffset;
+                var resolvedHook = resolveValue(config.playActionHook || '/player', data);
+                if (resolvedHook) audioVerb.actionHook = resolvedHook;
+                logMessage('DEBUG', 'Built play verb (url: ' + resolvedUrl + ')');
+            } else {
+                // Say mode (default)
+                var promptText = resolveValue(config.prompt || '', data);
+                audioVerb = {
+                    verb: 'say',
+                    text: promptText,
+                    loop: config.loop || 1,
+                    synthesizer: {}
+                };
+                if (config.vendor) audioVerb.synthesizer.vendor = config.vendor.toLowerCase();
+                if (config.language) audioVerb.synthesizer.language = config.language;
+                if (config.voice) audioVerb.synthesizer.voice = config.voice;
+                if (Object.keys(audioVerb.synthesizer).length === 0) delete audioVerb.synthesizer;
+                logMessage('DEBUG', 'Built say verb (text: ' + promptText + ')');
+            }
+
+            // Resolve ws client and msgid from refs
+            var ws = $.refs.client;
+            var msgid = $.refs.msgid || data.msgid || '';
+
+            // Gather verb triggers the next session:reconnect from Jambonz (Say mode only)
+            var gatherVerb = {
+                verb: 'gather',
+                actionHook: '/dummy',
+                input: ['speech'],
+                timeout: 1,
+                recognizer: { vendor: 'google', vad: { enable: true, mode: 3, voiceMs: 5000 } }
+            };
+
+            // If nothing is connected to Output, this is the last node — end with hangup
+            var conn = instance.connections && instance.connections.output;
+            var isLastNode = !conn || !conn.length;
+
+            var response;
+
+            // Case B: flowPath has values but doesn't contain current node ID
+            if (hasFlowPath && hasStepNum) {
+                var newFlowPath = flowPath.slice();
+                newFlowPath.push(nodeId);
+                var newStepNum = (typeof stepNum === 'number' ? stepNum : parseInt(stepNum, 10)) + 1;
+
+                var verbsB = [
+                    { verb: 'tag', data: { step_num: newStepNum, flowPath: newFlowPath } },
+                    audioVerb
+                ];
+
+                if (isLastNode)
+                    verbsB.push({ verb: 'hangup' });
+                else if (config.audioType === 'say')
+                    verbsB.push(gatherVerb);
+
+                response = { type: 'ack', msgid: msgid, data: verbsB };
+                logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + newStepNum + ', isLastNode: ' + isLastNode + ')');
+            } else {
+                // Case A: no flowPath or empty flowPath — first handler in chain
+                var verbsA = [
+                    { verb: 'tag', data: { step_num: 0, flowPath: [nodeId] } },
+                    { verb: 'answer' },
+                    audioVerb
+                ];
+
+                if (isLastNode)
+                    verbsA.push({ verb: 'hangup' });
+                else if (config.audioType === 'say')
+                    verbsA.push(gatherVerb);
+
+                response = { type: 'ack', msgid: msgid, data: verbsA };
+                logMessage('INFO', 'Case A — first in chain (isLastNode: ' + isLastNode + ')');
+            }
+
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(response));
+                logMessage('DEBUG', 'Sent ack to Jambonz: ' + JSON.stringify(response));
+            } else {
+                logMessage('ERROR', 'WS client is not open, skipping send', true);
+            }
+
+            $.destroy();
+        };
+
+        computeFooterStatus();
+    };
+
+    </script>
+
+    <settings>
+
+        <script>
+            // Dropdown options - MODIFY ONLY THESE ARRAYS TO CHANGE OPTIONS
+            var vendors = ['AssemblyAI', 'AWS', 'Cartesia', 'Cobalt', 'Custom', 'Deepgram', 'ElevenLabs', 'Google', 'IBM', 'Microsoft', 'Nuance', 'Nvidia', 'OpenAI', 'PlayHT', 'RimeLabs', 'Soniox', 'Speechmatics', 'Verbio', 'Voxist', 'WellSaid', 'Whisper'];
+            var languages = ['uk-UA', 'ru-RU', 'en-US'];
+            var timezones = [
+                'UTC',
+                'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+                'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+                'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+                'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+                'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+                'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+                'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+                'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+                'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+                'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+                'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+                'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+            ];
+        </script>
+
+        <div class="padding">
+
+            <!-- Audio Settings (always visible, not collapsible) -->
+            <div style="font-size: 16px; padding: 4px 0 8px;"><b>Audio Settings</b></div>
+            <div class="row">
+                <div class="col-md-6 m">
+                    <ui-component name="input" path="?.audioType" config="dirsource:say|Say,play|Play">Audio Type</ui-component>
+                </div>
+            </div>
+
+            <!-- Play mode fields -->
+            <div data-bind="?.audioType__show:value === 'play'" class="hidden">
+                <div class="row">
+                    <div class="col-md-12 m">
+                        <ui-component name="input" path="?.audioUrl" config="placeholder:https://example.com/prompt.wav">Audio URL</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.playTimeout" config="type:number;min:0;increment:1">Play Timeout (sec)</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.playLoops" config="type:number;min:1;increment:1">Play loops</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.playOffset" config="type:number;min:0;increment:1">Play offset (sec)</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.playActionHook" config="placeholder:/player">Action Hook</ui-component>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Say mode fields: two-column layout -->
+            <div data-bind="?.audioType__show:value === 'say'" class="hidden">
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.prompt" config="placeholder:Enter text to speak;type:multiline;rows:8;height:200">Prompt</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.vendor" config="placeholder:Select vendor;dirsource:vendors;dirempty:None">Vendor (optional)</ui-component>
+                        <ui-component name="input" path="?.language" config="placeholder:Select language;dirsource:languages;dirempty:None">Language (optional)</ui-component>
+                        <ui-component name="input" path="?.voice" config="placeholder:e.g. uk-UA-Chirp3-HD-Achernar">Voice (optional)</ui-component>
+                        <ui-component name="input" path="?.loop" config="type:number;min:1;increment:1">Loop</ui-component>
+                    </div>
+                </div>
+            </div>
+
+            <details class="maintenance-details">
+                <summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+                <div class="maintenance-content">
+                    <div class="row">
+                        <div class="col-md-6 m">
+                            <ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+                        </div>
+                        <div class="col-md-6 m">
+                            <ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 m">
+                            <ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+                        </div>
+                        <div class="col-md-6 m">
+                            <ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 m maintenance-checkbox-group">
+                            <ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+                            <ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="timezone-field-wrapper m">
+                                <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                                <ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+        </div>
+    </settings>
+
+    <style>
+    .CLASS { border-color: #c85a5a !important; }
+    .CLASS header { background-color: #c85a5a; color: white; }
+    .CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+    /* Fix directory dropdown positioning */
+    #flow_settings .ui-directory {
+        position: fixed !important;
+    }
+
+    /* Input field styling for Prompt, Voice and Loop */
+    #flow_settings textarea[name="prompt"],
+    #flow_settings input[name="voice"],
+    #flow_settings input[name="loop"] {
+        font-family: Consolas, monospace !important;
+        color: darkblue !important;
+    }
+
+    .ui-dark #flow_settings textarea[name="prompt"],
+    .ui-dark #flow_settings input[name="voice"],
+    .ui-dark #flow_settings input[name="loop"] {
+        color: #6fa8dc !important;
+    }
+
+    /* Timezone field wrapper */
+    .timezone-field-wrapper {
+        width: 65%;
+    }
+
+    .timezone-field-wrapper .ui-input-label {
+        font-size: inherit !important;
+        color: inherit !important;
+    }
+
+    /* Maintenance collapsible section — default collapsed */
+    .maintenance-details {
+        margin-top: 12px;
+        border: none;
+    }
+    .maintenance-summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 16px;
+        padding: 4px 0 8px;
+        user-select: none;
+    }
+    .maintenance-summary::-webkit-details-marker { display: none; }
+    .maintenance-summary::before {
+        content: '\25B6';
+        display: inline-block;
+        margin-right: 10px;
+        transition: transform 0.15s ease;
+    }
+    .maintenance-details[open] .maintenance-summary::before {
+        transform: rotate(90deg);
+    }
+    .maintenance-content {
+        padding-top: 8px;
+        padding-bottom: 4px;
+    }
+    .maintenance-checkbox-group .ui-input {
+        display: block;
+        margin-bottom: 20px;
+    }
+    .maintenance-checkbox-group .ui-input:last-child {
+        margin-bottom: 0;
+    }
+
+    /* Footer */
+    .CLASS footer {
+        padding: 10px;
+        font-size: 12px;
+        display: block;
+    }
+    .CLASS footer .audio-display {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+    }
+    </style>
+
+    <body>
+    <header>
+        <i class="$ICON"></i>$NAME
+    </header>
+    <footer>
+        <div class="audio-display"><ui-bind path="$STATUS.display" config="text"></ui-bind></div>
+    </footer>
+    </body>
+
+    <readme>
+# Jambonz Prompt
+https://docs.jambonz.org/verbs/verbs/say
+https://docs.jambonz.org/verbs/verbs/play
+
+This component adds a Jambonz `say` or `play` verb to the websocket flow using the `tag`-based `flowPath` pattern for sequential verb chaining.
+
+## Inputs / Outputs
+
+- **Input** — Receives filtered messages from `jambonz_ws_router` FLOW output
+- **Output** — Pass-through for messages where this node has already been visited (connect to next flow node)
+- **debug** — Formatted debug/error messages (when "Send to Debug output" options are enabled)
+
+Ack responses are sent directly to the Jambonz websocket client via `$.refs.client` (attached by the router).
+
+## flowPath Pattern
+
+Each node self-selects whether to handle or pass through based on the `flowPath` array in the incoming `tag` data:
+
+1. **No flowPath / empty** (first call, `session:new`): Responds with `answer` + audio verb wrapped in an ack, including a `tag` verb with `flowPath: [nodeId]` and `step_num: 0`
+2. **flowPath exists, node NOT in it** (subsequent event): Appends its nodeId to `flowPath`, increments `step_num`, responds with audio verb in ack
+3. **flowPath exists, node IS in it** (already visited): Passes message through to Output unchanged
+
+In **Say** mode a trailing `gather` verb is appended to trigger the next `session:reconnect`. In **Play** mode the play verb's own `actionHook` triggers the next event.
+
+## Configuration
+
+### Audio Settings
+- **Audio Type** — Select audio mode: Say (default) or Play
+- **Say** — Text-to-speech with vendor, language, voice, and loop settings
+- **Play** — Play an audio file URL with optional timeout, loops, offset, and action hook (default: `/player`)
+
+### Dynamic Value Templates
+The Prompt and Audio URL fields support template syntax: `{{ $data.fieldName }}` and math: `{{ $data.balance - $data.amount }}`
+
+## Debug Configuration
+
+Same debug options as the WS router and gather components.
+
+</readme>

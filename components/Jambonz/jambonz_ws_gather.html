@@ -1,0 +1,897 @@
+<script total>
+
+  var COMPONENT_NAME = 'Jambonz [WS] gather';
+  exports.id = 'jambonz_ws_gather';
+  exports.name = COMPONENT_NAME;
+  exports.group = 'Jambonz';
+  exports.icon = 'ti ti-atom';
+  exports.author = 'Demon';
+  exports.version = '3.1.2';
+  exports.config = {
+      vendor: '',
+      language: '',
+      speech: true,
+      dtmf: false,
+      speechBargein: false,
+      dtmfBargein: false,
+      dtmfDigits: '',
+      finishOnKey: '#',
+      noInputTimeout: 5,
+      vad: false,
+      vadSensitivity: 1,
+      vadMinSpeech: 200,
+      customSettings: false,
+      customSettingsJson: '',
+      audioType: 'none',
+      audioUrl: '',
+      playTimeout: 0,
+      playLoops: 1,
+      playOffset: 0,
+      prompt: '',
+      sayVendor: '',
+      sayLanguage: '',
+      sayVoice: '',
+      sayLoop: 1,
+      actionHook: '/transcriber',
+      enableHookWaiting: false,
+      actionAttempts: 1,
+      actionWaitTime: 5,
+      totalNoResponseWaitTime: 10,
+      defineActions: '',
+      debug_enabled: false,
+      debug_nameid: true,
+      debug_to_output: false,
+      debug_timestamp: true,
+      debug_errors_to_output: false,
+      debug_timezone: 'UTC',
+      debug_json: false
+  };
+  exports.inputs = [{ id: 'input', name: 'Input' }];
+  exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
+
+  exports.make = function(instance, config) {
+
+      var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+      var getTimestamp = function() {
+          try {
+              var now = new Date();
+              var timezone = config.debug_timezone || 'UTC';
+
+              if (timezone.match(/^GMT[+-]\d+$/)) {
+                  var offset = parseInt(timezone.substring(3));
+                  var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+                  var adjustedTime = new Date(utcTime + (offset * 3600000));
+
+                  var year = adjustedTime.getUTCFullYear();
+                  var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+                  var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+                  var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+                  var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+                  var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+                  var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+
+                  return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+              }
+
+              var formatter = new Intl.DateTimeFormat('en-US', {
+                  timeZone: timezone,
+                  year: 'numeric',
+                  month: '2-digit',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                  fractionalSecondDigits: 3,
+                  hour12: false
+              });
+
+              var parts = formatter.formatToParts(now);
+              var dateParts = {};
+
+              for (var part of parts) {
+                  dateParts[part.type] = part.value;
+              }
+
+              return dateParts.year + '-' + dateParts.month + '-' + dateParts.day + ' ' +
+                  dateParts.hour + ':' + dateParts.minute + ':' + dateParts.second + '.' +
+                  dateParts.fractionalSecond + '000';
+          } catch (e) {
+              var d = new Date();
+              var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+              return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+          }
+      };
+
+      var logMessage = function(level, message, isError) {
+          if (!config.debug_enabled) return;
+
+          var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+          var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+          var output;
+
+          if (config.debug_json) {
+              var entry = {};
+              if (config.debug_timestamp) entry.time = getTimestamp();
+              if (config.debug_nameid) {
+                  entry.component = COMPONENT_NAME;
+                  entry.nodeId = '[' + instance.id + ']';
+              }
+              entry.level = level;
+              entry.message = message;
+              output = JSON.stringify(entry);
+          } else {
+              var parts = [];
+              if (config.debug_timestamp) parts.push(getTimestamp());
+              if (config.debug_nameid) parts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+              parts.push(paddedLevel);
+              parts.push(message);
+              output = parts.join(' ');
+          }
+
+          if (sendToOutput) {
+              try {
+                  var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+                  m.send('debug');
+              } catch (e) {}
+          } else {
+              console.log(output);
+          }
+      };
+
+      var resolvePathOrValue = function(expr, data) {
+          expr = expr.trim();
+          if (expr.startsWith('$data.')) {
+              var path = expr.substring(6);
+              var value = U.get(data, path);
+              return value !== undefined ? value : null;
+          }
+
+          var num = parseFloat(expr);
+          if (!isNaN(num)) {
+              return num;
+          }
+
+          return expr;
+      };
+
+      var resolveValue = function(valueStr, data) {
+          if (typeof valueStr !== 'string') {
+              return valueStr;
+          }
+
+          var result = valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+              expression = expression.trim();
+
+              var mathMatch = expression.match(/^(.+?)\s*([\+\-\*\/])\s*(.+)$/);
+              if (mathMatch) {
+                  var left = resolvePathOrValue(mathMatch[1], data);
+                  var operator = mathMatch[2];
+                  var right = resolvePathOrValue(mathMatch[3], data);
+
+                  if (left === null || right === null) {
+                      return '<bad expression>';
+                  }
+
+                  var leftNum = parseFloat(left);
+                  var rightNum = parseFloat(right);
+
+                  if (!isNaN(leftNum) && !isNaN(rightNum)) {
+                      switch (operator) {
+                          case '+': return leftNum + rightNum;
+                          case '-': return leftNum - rightNum;
+                          case '*': return leftNum * rightNum;
+                          case '/': return rightNum !== 0 ? leftNum / rightNum : 0;
+                      }
+                  }
+                  return '<bad expression>';
+              } else {
+                  var resolved = resolvePathOrValue(expression, data);
+                  if (resolved === null) {
+                      return '<bad expression>';
+                  }
+                  return resolved !== expression ? resolved : '<bad expression>';
+              }
+          });
+
+          return result;
+      };
+
+      var buildGatherVerb = function(data) {
+          var gatherVerb = {
+              verb: 'gather',
+              input: []
+          };
+
+          if (config.speech) gatherVerb.input.push('speech');
+          if (config.dtmf) gatherVerb.input.push('digits');
+          if (gatherVerb.input.length === 0) gatherVerb.input.push('speech');
+
+          if (config.speechBargein) gatherVerb.bargein = true;
+          if (config.dtmfBargein) gatherVerb.dtmfBargein = true;
+
+          if (config.finishOnKey && config.finishOnKey.trim() !== '') {
+              gatherVerb.finishOnKey = config.finishOnKey.trim();
+          }
+
+          gatherVerb.timeout = config.noInputTimeout || 5;
+
+          if ((config.vendor && config.vendor.trim() !== '') ||
+              (config.language && config.language.trim() !== '')) {
+              gatherVerb.recognizer = {};
+
+              if (config.vendor && config.vendor.trim() !== '') {
+                  gatherVerb.recognizer.vendor = config.vendor.trim().toLowerCase();
+              }
+
+              if (config.language && config.language.trim() !== '') {
+                  gatherVerb.recognizer.language = config.language.trim();
+              }
+          }
+
+          if (config.vad) {
+              if (!gatherVerb.recognizer) gatherVerb.recognizer = {};
+              gatherVerb.recognizer.vad = {
+                  enable: true,
+                  mode: config.vadSensitivity || 1,
+                  voiceMs: config.vadMinSpeech || 200
+              };
+          }
+
+          if (config.customSettings && config.customSettingsJson && config.customSettingsJson.trim() !== '') {
+              var resolvedJson = resolveValue(config.customSettingsJson.trim(), data);
+              try {
+                  var parsedCustom = JSON.parse(resolvedJson);
+                  if (!gatherVerb.recognizer) gatherVerb.recognizer = {};
+                  for (var key in parsedCustom) {
+                      if (parsedCustom.hasOwnProperty(key)) {
+                          gatherVerb.recognizer[key] = parsedCustom[key];
+                      }
+                  }
+              } catch (e) {
+                  logMessage('WARNING', 'Invalid custom settings JSON: ' + (e.message || String(e)));
+              }
+          }
+
+          // Audio: Play
+          if (config.audioType === 'play' && config.audioUrl && config.audioUrl.trim()) {
+              var resolvedUrl = resolveValue(config.audioUrl.trim(), data);
+              var playObj = { url: resolvedUrl };
+              if (config.playTimeout > 0) playObj.timeoutSecs = config.playTimeout;
+              if (config.playLoops > 1) playObj.loop = config.playLoops;
+              if (config.playOffset > 0) playObj.seekOffset = config.playOffset;
+              gatherVerb.play = playObj;
+          }
+
+          // Audio: Say
+          if (config.audioType === 'say' && config.prompt && config.prompt.trim()) {
+              var resolvedPrompt = resolveValue(config.prompt.trim(), data);
+              var sayObj = { text: resolvedPrompt };
+              if (config.sayLoop > 1) sayObj.loop = config.sayLoop;
+              var synthesizer = {};
+              if (config.sayVendor) synthesizer.vendor = config.sayVendor.toLowerCase();
+              if (config.sayLanguage) synthesizer.language = config.sayLanguage;
+              if (config.sayVoice) synthesizer.voice = config.sayVoice;
+              if (Object.keys(synthesizer).length > 0) sayObj.synthesizer = synthesizer;
+              gatherVerb.say = sayObj;
+          }
+
+          if (config.actionHook && config.actionHook.trim() !== '') {
+              var resolvedActionHook = resolveValue(config.actionHook.trim(), data);
+              gatherVerb.actionHook = resolvedActionHook;
+          }
+
+          if (config.enableHookWaiting && config.actionHook && config.actionHook.trim() !== '') {
+              gatherVerb.actionHookDelayAction = {
+                  enabled: true,
+                  retries: config.actionAttempts || 1,
+                  noResponseTimeout: config.actionWaitTime || 5,
+                  noResponseGiveUpTimeout: config.totalNoResponseWaitTime || 10
+              };
+
+              if (config.defineActions && config.defineActions.trim() !== '') {
+                  var resolvedActions = resolveValue(config.defineActions.trim(), data);
+                  try {
+                      var actionsJson;
+                      try {
+                          actionsJson = JSON.parse(resolvedActions);
+                      } catch (e) {
+                          actionsJson = JSON.parse('[' + resolvedActions + ']');
+                      }
+
+                      if (Array.isArray(actionsJson)) {
+                          gatherVerb.actionHookDelayAction.actions = actionsJson;
+                      } else {
+                          gatherVerb.actionHookDelayAction.actions = [actionsJson];
+                      }
+                  } catch (e) {
+                      logMessage('WARNING', 'Invalid define actions JSON: ' + (e.message || String(e)));
+                  }
+              }
+          }
+
+          return gatherVerb;
+      };
+
+      // Footer display helpers
+      var computePlayDisplay = function(url) {
+          if (!url || !url.trim()) return 'Play: undefined';
+          var trimmed = url.trim();
+          if (trimmed.charAt(trimmed.length - 1) === '/') return 'Play: incorrect';
+          var lastSlash = trimmed.lastIndexOf('/');
+          var filename = lastSlash >= 0 ? trimmed.substring(lastSlash + 1) : trimmed;
+          if (!filename) return 'Play: incorrect';
+          return 'Play: ' + filename;
+      };
+
+      var computeSayDisplay = function(text) {
+          if (!text || !text.trim()) return 'Say: undefined';
+          return 'Say: ' + text.trim();
+      };
+
+      var computeFooterStatus = function() {
+          var cfg = (typeof instance.replace === 'function' && instance.replace(config)) || config;
+          var display;
+          if (cfg.audioType === 'none') {
+              display = 'Say: None';
+          } else if (cfg.audioType === 'play') {
+              display = computePlayDisplay(cfg.audioUrl);
+          } else {
+              display = computeSayDisplay(cfg.prompt);
+          }
+          instance.status({ display: display });
+      };
+
+      instance.configure = function() {
+          setTimeout(computeFooterStatus, 0);
+      };
+
+      instance.message = function($) {
+          var data = $ && $.data ? $.data : {};
+
+          if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+              data = {};
+          }
+
+          var nodeId = instance.id;
+          var flowPath = Array.isArray(data.flowPath) ? data.flowPath : null;
+          var stepNum = data.step_num;
+          var hasFlowPath = flowPath && flowPath.length > 0;
+          var hasStepNum = stepNum !== undefined && stepNum !== null;
+
+          logMessage('DEBUG', 'Received message (type: ' + (data.type || 'n/a') + ', msgid: ' + (data.msgid || 'n/a') + ', flowPath: ' + JSON.stringify(flowPath) + ', step_num: ' + stepNum + ')');
+
+          // Case C: flowPath contains current node ID — pass through
+          if (hasFlowPath && hasStepNum && flowPath.indexOf(nodeId) !== -1) {
+              logMessage('DEBUG', 'Pass-through — node already in flowPath');
+              $.send('output');
+              $.destroy();
+              return;
+          }
+
+          // Build gather verb from config
+          var gatherVerb = buildGatherVerb(data);
+
+          // Resolve ws client and msgid from refs
+          var ws = $.refs.client;
+          var msgid = $.refs.msgid || data.msgid || '';
+
+          // If nothing is connected to Output, this is the last node — end with hangup
+          var conn = instance.connections && instance.connections.output;
+          var isLastNode = !conn || !conn.length;
+
+          var response;
+
+          // Case B: flowPath has values but doesn't contain current node ID
+          if (hasFlowPath && hasStepNum) {
+              var newFlowPath = flowPath.slice();
+              newFlowPath.push(nodeId);
+              var newStepNum = (typeof stepNum === 'number' ? stepNum : parseInt(stepNum, 10)) + 1;
+
+              var verbsB = [
+                  { verb: 'tag', data: { step_num: newStepNum, flowPath: newFlowPath } },
+                  gatherVerb
+              ];
+
+              if (isLastNode) verbsB.push({ verb: 'hangup' });
+
+              response = { type: 'ack', msgid: msgid, data: verbsB };
+              logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + newStepNum + ', isLastNode: ' + isLastNode + ')');
+          } else {
+              // Case A: no flowPath or empty flowPath — first handler in chain
+              var verbsA = [
+                  { verb: 'tag', data: { step_num: 0, flowPath: [nodeId] } },
+                  { verb: 'answer' },
+                  gatherVerb
+              ];
+
+              if (isLastNode) verbsA.push({ verb: 'hangup' });
+
+              response = { type: 'ack', msgid: msgid, data: verbsA };
+              logMessage('INFO', 'Case A — first in chain (isLastNode: ' + isLastNode + ')');
+          }
+
+          if (ws && ws.readyState === 1) {
+              ws.send(JSON.stringify(response));
+              logMessage('DEBUG', 'Sent ack to Jambonz: ' + JSON.stringify(response));
+          } else {
+              logMessage('ERROR', 'WS client is not open, skipping send', true);
+          }
+
+          $.destroy();
+      };
+
+      computeFooterStatus();
+  };
+
+</script>
+
+<settings>
+
+  <script>
+      // Dropdown options - MODIFY ONLY THESE ARRAYS TO CHANGE OPTIONS
+      var vendors = ['AssemblyAI', 'AWS', 'Cartesia', 'Cobalt', 'Deepgram', 'ElevenLabs', 'Google', 'IBM', 'Microsoft', 'Nuance', 'Nvidia', 'OpenAI', 'PlayHT', 'RimeLabs', 'Soniox', 'Speechmatics', 'Verbio', 'Voxist', 'WellSaid', 'Whisper'];
+      var languages = ['uk-UA', 'ru-RU', 'en-US'];
+      var timezones = [
+          'UTC',
+          'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+          'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+          'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+          'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+          'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+          'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+          'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+          'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+          'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+          'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+          'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+          'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+      ];
+  </script>
+
+  <div class="padding">
+
+      <!-- Audio Settings (always visible, not collapsible) -->
+      <div style="font-size: 16px; padding: 4px 0 8px;"><b>Audio Settings</b></div>
+      <div class="row">
+          <div class="col-md-6 m">
+              <ui-component name="input" path="?.audioType" config="dirsource:none|None,play|Play,say|Say">Audio Type</ui-component>
+          </div>
+      </div>
+
+      <!-- None mode: info banner -->
+      <div data-bind="?.audioType__show:value === 'none'" class="hidden">
+          <div class="row">
+              <div class="col-md-12 m">
+                  <div class="audio-info-banner"><i class="ti ti-info-circle"></i> No audio will be played by this node</div>
+              </div>
+          </div>
+      </div>
+
+      <!-- Play mode fields -->
+      <div data-bind="?.audioType__show:value === 'play'" class="hidden">
+          <div class="row">
+              <div class="col-md-12 m">
+                  <ui-component name="input" path="?.audioUrl" config="placeholder:https://example.com/prompt.wav">Audio URL</ui-component>
+              </div>
+          </div>
+          <div class="row">
+              <div class="col-md-4 m">
+                  <ui-component name="input" path="?.playTimeout" config="type:number;min:0;increment:1">Play Timeout (sec)</ui-component>
+              </div>
+              <div class="col-md-4 m">
+                  <ui-component name="input" path="?.playLoops" config="type:number;min:1;increment:1">Play loops</ui-component>
+              </div>
+              <div class="col-md-4 m">
+                  <ui-component name="input" path="?.playOffset" config="type:number;min:0;increment:1">Play offset (sec)</ui-component>
+              </div>
+          </div>
+      </div>
+
+      <!-- Say mode fields: two-column layout -->
+      <div data-bind="?.audioType__show:value === 'say'" class="hidden">
+          <div class="row">
+              <div class="col-md-6 m">
+                  <ui-component name="input" path="?.prompt" config="placeholder:Enter text to speak;type:multiline;rows:8;height:200">Prompt</ui-component>
+              </div>
+              <div class="col-md-6 m">
+                  <ui-component name="input" path="?.sayVendor" config="placeholder:Select vendor;dirsource:vendors;dirempty:None">Vendor (optional)</ui-component>
+                  <ui-component name="input" path="?.sayLanguage" config="placeholder:Select language;dirsource:languages;dirempty:None">Language (optional)</ui-component>
+                  <ui-component name="input" path="?.sayVoice" config="placeholder:e.g. uk-UA-Chirp3-HD-Achernar">Voice (optional)</ui-component>
+                  <ui-component name="input" path="?.sayLoop" config="type:number;min:1;increment:1">Loop</ui-component>
+              </div>
+          </div>
+      </div>
+
+      <details class="maintenance-details">
+          <summary class="maintenance-summary"><b>Input Settings</b></summary>
+          <div class="maintenance-content">
+              <div class="row">
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.speech" config="type:checkbox">Speech</ui-component>
+                  </div>
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.speechBargein" config="type:checkbox">Speech bargein</ui-component>
+                  </div>
+              </div>
+              <div class="row">
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.dtmf" config="type:checkbox">DTMF</ui-component>
+                  </div>
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.dtmfBargein" config="type:checkbox">DTMF bargein</ui-component>
+                  </div>
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.dtmfDigits" config="type:number;min:1;max:99;increment:1">Digits</ui-component>
+                  </div>
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.finishOnKey" config="placeholder:#">Finish on key</ui-component>
+                  </div>
+              </div>
+              <div class="row">
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.noInputTimeout" config="type:number;min:0;increment:1">No input timeout (sec)</ui-component>
+                  </div>
+              </div>
+          </div>
+      </details>
+
+      <details class="maintenance-details">
+          <summary class="maintenance-summary"><b>Recognizer Settings</b></summary>
+          <div class="maintenance-content">
+              <div class="row">
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.vendor" config="dirsource:vendors;placeholder:Select vendor">Vendor</ui-component>
+                  </div>
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.language" config="dirsource:languages;placeholder:Select language">Language</ui-component>
+                  </div>
+              </div>
+
+              <br />
+
+              <div class="row">
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.vad" config="type:checkbox">VAD</ui-component>
+                  </div>
+                  <div class="col-md-3 m">
+                      <ui-component name="input" path="?.vadSensitivity" config="type:number;min:0;max:3;increment:1">VAD Sensitivity</ui-component>
+                  </div>
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.vadMinSpeech" config="type:number;min:0;increment:50">VAD Min Speech (ms)</ui-component>
+                  </div>
+              </div>
+
+              <br />
+
+              <div class="row">
+                  <div class="col-md-12 m">
+                      <ui-component name="input" path="?.customSettings" config="type:checkbox">Define additional settings in JSON format</ui-component>
+                  </div>
+              </div>
+              <div data-bind="?.customSettings__show:value" class="hidden">
+                  <div class="row">
+                      <div class="col-md-6 m">
+                          <ui-component name="input" path="?.customSettingsJson" config="type:multiline;rows:6;height:126">Settings</ui-component>
+                      </div>
+                      <div class="col-md-6 m">
+                          <div class="ui-example">
+                              <div class="ui-example-label">Example:</div>
+                              <div class="ui-example-text" style="height: 138px;">{<br>&nbsp;&nbsp;"hints": ["so","no","yes"],<br>&nbsp;&nbsp;"hintsBoost": 25<br>}</div>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      </details>
+
+      <details class="maintenance-details">
+          <summary class="maintenance-summary"><b>Hook Settings</b></summary>
+          <div class="maintenance-content">
+              <div class="row">
+                  <div class="col-md-12 m">
+                      <ui-component name="input" path="?.actionHook" config="placeholder:/transcriber">Action Hook (URL to send gather results)</ui-component>
+                  </div>
+              </div>
+
+              <br />
+
+              <div class="row">
+                  <div class="col-md-12 m">
+                      <ui-component name="input" path="?.enableHookWaiting" config="type:checkbox">Enable hook waiting management</ui-component>
+                  </div>
+              </div>
+              <div data-bind="?.enableHookWaiting__show:value" class="hidden">
+                  <div class="row">
+                      <div class="col-md-4 m">
+                          <ui-component name="input" path="?.actionAttempts" config="type:number;min:1;increment:1">Action attempts</ui-component>
+                      </div>
+                      <div class="col-md-4 m">
+                          <ui-component name="input" path="?.actionWaitTime" config="type:number;min:1;increment:1">Action Wait Time (sec)</ui-component>
+                      </div>
+                      <div class="col-md-4 m">
+                          <ui-component name="input" path="?.totalNoResponseWaitTime" config="type:number;min:1;increment:1">Total no-Response Wait Time (sec)</ui-component>
+                      </div>
+                  </div>
+                  <div class="row">
+                      <div class="col-md-12">
+                          <div class="help">Note:<br>- Prompts play duration is included in Total no-Response Wait Time<br>- If attempts and actions are done much early then Total no-Response Wait Time - system will wait silently for the remaining time</div>
+                      </div>
+                  </div>
+
+                  <br />
+
+                  <div class="row">
+                      <div class="col-md-6 m">
+                          <ui-component name="input" path="?.defineActions" config="type:multiline;rows:12;height:278">Define Actions</ui-component>
+                      </div>
+                      <div class="col-md-6 m">
+                          <div class="ui-example">
+                              <div class="ui-example-label">Example:</div>
+                              <div class="ui-example-text" style="height: 288px;">{<br>&nbsp;&nbsp;"verb": "play",<br>&nbsp;&nbsp;"timeoutSecs": 5,<br>&nbsp;&nbsp;"url": "https://example.com/prompt.wav"<br>},<br>{<br>&nbsp;&nbsp;"verb": "say",<br>&nbsp;&nbsp;"text": "I am still transcribing !",<br>&nbsp;&nbsp;"synthesizer": {<br>&nbsp;&nbsp;&nbsp;&nbsp;"vendor": "google",<br>&nbsp;&nbsp;&nbsp;&nbsp;"language": "uk-UA",<br>&nbsp;&nbsp;&nbsp;&nbsp;"voice": "uk-UA-Chirp3-HD-Achernar"<br>&nbsp;&nbsp;}<br>}</div>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      </details>
+
+      <details class="maintenance-details">
+          <summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+          <div class="maintenance-content">
+              <div class="row">
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+                  </div>
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+                  </div>
+              </div>
+
+              <div class="row">
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+                  </div>
+                  <div class="col-md-6 m">
+                      <ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+                  </div>
+              </div>
+
+              <div class="row">
+                  <div class="col-md-6 m maintenance-checkbox-group">
+                      <ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+                      <ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+                  </div>
+                  <div class="col-md-6">
+                      <div class="timezone-field-wrapper m">
+                          <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                          <ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      </details>
+
+  </div>
+</settings>
+
+<style>
+.CLASS { border-color: #c85a5a !important; }
+.CLASS header { background-color: #c85a5a; color: white; }
+.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+/* Fix directory dropdown positioning */
+#flow_settings .ui-directory {
+    position: fixed !important;
+}
+
+/* Input field styling for text inputs and dropdowns */
+#flow_settings input[type="text"],
+#flow_settings select {
+  font-family: Consolas, monospace !important;
+  color: darkblue !important;
+}
+
+.ui-dark #flow_settings input[type="text"],
+.ui-dark #flow_settings select {
+  color: #6fa8dc !important;
+}
+
+/* Input field styling for number inputs */
+#flow_settings input[type="number"] {
+  font-family: Consolas, monospace !important;
+  color: darkblue !important;
+}
+
+.ui-dark #flow_settings input[type="number"] {
+  color: #6fa8dc !important;
+}
+
+/* Textarea styling */
+.ui-input-control textarea {
+  font-family: Consolas, monospace !important;
+  color: darkblue !important;
+  overflow-y: auto !important;
+  resize: vertical !important;
+}
+
+.ui-dark .ui-input-control textarea {
+  color: #6fa8dc !important;
+}
+
+/* Number input with max width */
+#flow_settings .col-md-3 input[type="number"],
+#flow_settings .col-md-4 input[type="number"],
+#flow_settings .col-md-6 input[type="number"] {
+  max-width: 70px !important;
+}
+
+/* Example label styling */
+.ui-example-label {
+  margin-bottom: 5px !important;
+  font-size: 12px;
+  color: #777;
+  height: 17.15px;
+  line-height: 17.15px;
+}
+
+/* Textarea input labels - match the example label styling */
+#flow_settings .ui-input-label {
+  margin-bottom: 5px !important;
+  height: 17.15px !important;
+  line-height: 17.15px !important;
+}
+
+/* Example box styling to match ui-input structure */
+.ui-example {
+  margin-bottom: 10px;
+}
+
+.ui-example-text {
+  padding: 8px;
+  background-color: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #999;
+  overflow-y: auto;
+}
+
+.ui-dark .ui-example-text {
+  background-color: #2a2a2a;
+  border-color: #404040;
+  color: #888;
+}
+
+/* Audio settings info banner */
+.audio-info-banner {
+    background-color: #f0f0f0;
+    padding: 10px 15px;
+    border-radius: 4px;
+    color: #666;
+}
+.audio-info-banner i {
+    margin-right: 6px;
+}
+.ui-dark .audio-info-banner {
+    background-color: #2a2a2a;
+    color: #888;
+}
+
+/* Timezone field wrapper */
+.timezone-field-wrapper {
+    width: 65%;
+}
+
+.timezone-field-wrapper .ui-input-label {
+    font-size: inherit !important;
+    color: inherit !important;
+}
+
+/* Maintenance collapsible section */
+.maintenance-details {
+    margin-top: 12px;
+    border: none;
+}
+.maintenance-summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 16px;
+    padding: 4px 0 8px;
+    user-select: none;
+}
+.maintenance-summary::-webkit-details-marker { display: none; }
+.maintenance-summary::before {
+    content: '\25B6';
+    display: inline-block;
+    margin-right: 10px;
+    transition: transform 0.15s ease;
+}
+.maintenance-details[open] .maintenance-summary::before {
+    transform: rotate(90deg);
+}
+.maintenance-content {
+    padding-top: 8px;
+    padding-bottom: 4px;
+}
+.maintenance-checkbox-group .ui-input {
+    display: block;
+    margin-bottom: 20px;
+}
+.maintenance-checkbox-group .ui-input:last-child {
+    margin-bottom: 0;
+}
+
+/* Footer */
+.CLASS footer {
+    padding: 10px;
+    font-size: 12px;
+    display: block;
+}
+.CLASS footer .audio-display {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+}
+</style>
+
+<body>
+<header>
+  <i class="$ICON"></i>$NAME
+</header>
+<footer>
+  <div class="audio-display"><ui-bind path="$STATUS.display" config="text"></ui-bind></div>
+</footer>
+</body>
+
+<readme>
+### Jambonz Gather
+https://docs.jambonz.org/verbs/verbs/gather
+
+This component adds a Jambonz `gather` verb to the websocket flow using the `tag`-based `flowPath` pattern for sequential verb chaining.
+
+## Inputs / Outputs
+
+- **Input** — Receives filtered messages from `jambonz_ws_router` FLOW output
+- **Output** — Pass-through for messages where this node has already been visited (connect to next flow node)
+- **debug** — Formatted debug/error messages (when "Send to Debug output" options are enabled)
+
+Ack responses are sent directly to the Jambonz websocket client via `$.refs.client` (attached by the router).
+
+## flowPath Pattern
+
+Each node self-selects whether to handle or pass through based on the `flowPath` array in the incoming `tag` data:
+
+1. **No flowPath / empty** (first call, `session:new`): Responds with `answer` + `gather` verbs wrapped in an ack, including a `tag` verb with `flowPath: [nodeId]` and `step_num: 0`
+2. **flowPath exists, node NOT in it** (subsequent event): Appends its nodeId to `flowPath`, increments `step_num`, responds with `gather` verb in ack
+3. **flowPath exists, node IS in it** (already visited): Passes message through to Output unchanged
+
+Since `gather` has its own `actionHook`, no trailing gather verb is appended (unlike the say component). If this node is the last in the chain (nothing connected to Output), a `hangup` verb is appended after the gather verb.
+
+## Configuration
+
+### Input Settings
+- **Speech / DTMF** — Input modes with bargein options
+- **Finish on key** — DTMF terminator character
+- **No input timeout** — Seconds to wait for input
+
+### Recognizer Settings
+- **Vendor / Language** — Speech recognition provider and language
+- **VAD** — Voice Activity Detection with sensitivity and min speech duration
+- **Custom settings** — Additional recognizer JSON (hints, boosts, etc.)
+
+### Audio Settings
+- **Audio Type** — Select audio mode: None (default), Play (audio file URL), or Say (text-to-speech)
+
+### Hook Settings
+- **Action Hook** — URL to send gather results (default: `/transcriber`)
+- **Hook waiting** — Retry and timeout settings for the action hook response
+
+## Debug Configuration
+
+Same debug options as the WS router and say components.
+</readme>

@@ -1,0 +1,565 @@
+<script total>
+
+  var COMPONENT_NAME = 'Jambonz [WS] router';
+
+	exports.id = 'jambonz_ws_router';
+	exports.name = COMPONENT_NAME;
+	exports.group = 'Jambonz';
+	exports.icon = 'ti ti-atom';
+	exports.author = 'Demon';
+	exports.version = '5.3.0';
+
+	exports.config = {
+		endpoint: '/ws/call',
+		debug_enabled: false,
+		debug_nameid: true,
+		debug_to_output: false,
+		debug_timestamp: true,
+		debug_errors_to_output: false,
+		debug_timezone: 'UTC',
+		debug_json: false
+	};
+
+	exports.inputs  = [];
+	exports.outputs = [{ id: 'flow', name: 'FLOW' }, { id: 'raw', name: 'raw' }, { id: 'debug', name: 'debug' }];
+
+	var _WS;
+	try { _WS = require('ws'); } catch (e) {}
+	var _URL = require('url');
+
+	exports.make = function(instance, config) {
+
+		var wss            = null;
+		var clients        = new Set();
+		var upgradeHandler = null;
+		var pingInterval   = null;
+
+		var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+		var getTimestamp = function() {
+			try {
+				var now = new Date();
+				var timezone = config.debug_timezone || 'UTC';
+
+				if (timezone.match(/^GMT[+-]\d+$/)) {
+					var offset = parseInt(timezone.substring(3));
+					var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+					var adjustedTime = new Date(utcTime + (offset * 3600000));
+
+					var year = adjustedTime.getUTCFullYear();
+					var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+					var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+					var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+					var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+					var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+					var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+
+					return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+				}
+
+				var formatter = new Intl.DateTimeFormat('en-US', {
+					timeZone: timezone,
+					year: 'numeric',
+					month: '2-digit',
+					day: '2-digit',
+					hour: '2-digit',
+					minute: '2-digit',
+					second: '2-digit',
+					fractionalSecondDigits: 3,
+					hour12: false
+				});
+
+				var parts = formatter.formatToParts(now);
+				var dateParts = {};
+
+				for (var part of parts) {
+					dateParts[part.type] = part.value;
+				}
+
+				return dateParts.year + '-' + dateParts.month + '-' + dateParts.day + ' ' +
+					dateParts.hour + ':' + dateParts.minute + ':' + dateParts.second + '.' +
+					dateParts.fractionalSecond + '000';
+			} catch (e) {
+				var d = new Date();
+				var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+				return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+			}
+		};
+
+		var logMessage = function(level, message, isError) {
+			if (!config.debug_enabled) return;
+
+			var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+			var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+			var output;
+
+			if (config.debug_json) {
+				var entry = {};
+				if (config.debug_timestamp) entry.time = getTimestamp();
+				if (config.debug_nameid) {
+					entry.component = COMPONENT_NAME;
+					entry.nodeId = '[' + instance.id + ']';
+				}
+				entry.level = level;
+				entry.message = message;
+				output = JSON.stringify(entry);
+			} else {
+				var parts = [];
+				if (config.debug_timestamp) parts.push(getTimestamp());
+				if (config.debug_nameid) parts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+				parts.push(paddedLevel);
+				parts.push(message);
+				output = parts.join(' ');
+			}
+
+			if (sendToOutput) {
+				try {
+					var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+					m.send('debug');
+				} catch (e) {}
+			} else {
+				console.log(output);
+			}
+		};
+
+		var buildFlowMessage = function(msg) {
+			if (!msg || typeof msg !== 'object') return msg;
+			var d = msg.data || {};
+			var result = {
+				type: msg.type || '',
+				msgid: msg.msgid || '',
+				jbz_call_sid: String(msg.call_sid || ''),
+				direction: String(d.direction || ''),
+				jbz_app_sid: String(d.application_sid || ''),
+				ani: String(d.from || ''),
+				dnis: String(d.to || ''),
+				jbz_call_id: String(d.call_id || ''),
+				sip_call_id: String(d.sbc_callid || ''),
+				trunk: String(d.originating_sip_trunk_name || '')
+			};
+
+			// customerData: flowPath tracking
+			var cd = d.customerData || {};
+			if (cd.step_num !== undefined) result.step_num = cd.step_num;
+			if (Array.isArray(cd.flowPath)) result.flowPath = cd.flowPath;
+
+			// ASR results: prefer top-level speech.alternatives (Jambonz-normalised),
+			// fall back to speech.vendor.evt.alternatives (raw vendor event)
+			var speech = d.speech;
+			if (speech && typeof speech === 'object') {
+				var alt = null;
+
+				if (Array.isArray(speech.alternatives) && speech.alternatives.length > 0) {
+					alt = speech.alternatives[0];
+				} else if (speech.vendor && speech.vendor.evt &&
+				           Array.isArray(speech.vendor.evt.alternatives) &&
+				           speech.vendor.evt.alternatives.length > 0) {
+					alt = speech.vendor.evt.alternatives[0];
+				}
+
+				if (alt) {
+					if (alt.confidence !== undefined) {
+						result.asr_confidence = Math.round(alt.confidence * 100) / 100;
+					}
+
+					if (alt.transcript !== undefined) {
+						var raw = String(alt.transcript).trim();
+						// Convert to integer only when the entire string is digits
+						result.asr_transcript = /^\d+$/.test(raw) ? parseInt(raw, 10) : raw;
+					}
+				}
+			}
+
+			return result;
+		};
+
+		var status = function(extra) {
+			var s = { online: clients.size };
+			if (extra) for (var k in extra) s[k] = extra[k];
+			instance.status(s, 1000);
+		};
+
+		instance.configure = function() {
+
+			if (pingInterval) {
+				clearInterval(pingInterval);
+				pingInterval = null;
+			}
+			if (upgradeHandler && global && global.F && global.F.server) {
+				try { global.F.server.removeListener('upgrade', upgradeHandler); } catch (e) {}
+				upgradeHandler = null;
+			}
+			if (wss) {
+				try {
+					clients.forEach(function(c) { try { c.terminate(); } catch (e) {} });
+					wss.close();
+				} catch (e) {}
+				wss = null;
+				clients.clear();
+			}
+
+			if (!_WS) {
+				logMessage('ERROR', 'ws module not found — run: npm install ws', true);
+				status({ hook: 'no-ws' });
+				return;
+			}
+
+			var F = (global && global.F) ? global.F : null;
+			if (!F || !F.server) {
+				logMessage('ERROR', 'F.server not accessible', true);
+				status({ hook: 'no-srv' });
+				return;
+			}
+
+			var cfg      = instance.replace(config);
+			var endpoint = (cfg.endpoint || '/ws/jambonz').trim();
+
+			wss = new _WS.Server({
+				noServer: true,
+				handleProtocols: function(protocols) {
+					var list;
+
+					if (protocols instanceof Set)
+						list = Array.from(protocols);
+					else if (Array.isArray(protocols))
+						list = protocols.slice(0);
+					else if (typeof protocols === 'string')
+						list = protocols.split(',').map(function(p) { return p.trim(); });
+					else
+						list = [];
+
+					if (!list.length) return;
+
+					var preferred = ['ws.jambonz.org', 'jambonz.jambonz.org'];
+
+					for (var i = 0; i < preferred.length; i++) {
+						if (list.indexOf(preferred[i]) !== -1) {
+							return preferred[i];
+						}
+					}
+					return list[0];
+				}
+			});
+
+			wss.on('connection', function(ws, req) {
+
+				logMessage('INFO', 'New WebSocket client connected');
+
+				ws.isAlive = true;
+				ws.on('pong', function() { ws.isAlive = true; });
+
+				clients.add(ws);
+				status({ hook: 'ok' });
+
+				ws.on('message', function(data) {
+
+					var str;
+					try {
+						str = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
+					} catch (e) {
+						logMessage('ERROR', 'Decode error: ' + (e.message || String(e)), true);
+						return;
+					}
+
+					var processed;
+					try {
+						processed = JSON.parse(str);
+						logMessage('DEBUG', 'Received from Jambonz (Type: ' + processed.type + ', MsgID: ' + processed.msgid + ')');
+					} catch (e) {
+						logMessage('ERROR', 'Parse error: ' + (e.message || String(e)), true);
+						return;
+					}
+
+					// Send to raw output (as-is)
+					var rawMsg = instance.newmessage(processed);
+					rawMsg.refs.client     = ws;
+					rawMsg.refs.controller = wss;
+					if (processed && processed.msgid) rawMsg.refs.msgid = processed.msgid;
+					rawMsg.send('raw');
+
+					// Send to FLOW output only for specific event types
+					var flowTypes = ['session:new', 'session:reconnect', 'verb:hook', 'dial:confirm'];
+					if (processed && flowTypes.indexOf(processed.type) !== -1) {
+						var flowData = buildFlowMessage(processed);
+						var flowMsg = instance.newmessage(flowData);
+						flowMsg.refs.client     = ws;
+						flowMsg.refs.controller = wss;
+						if (processed && processed.msgid) flowMsg.refs.msgid = processed.msgid;
+						flowMsg.send('flow');
+					}
+				});
+
+				ws.on('close', function() {
+					logMessage('INFO', 'Client disconnected');
+					clients.delete(ws);
+					status({ hook: 'ok' });
+				});
+
+				ws.on('error', function(err) {
+					clients.delete(ws);
+					status({ hook: 'ok' });
+					logMessage('ERROR', 'Client error: ' + (err.message || String(err)), true);
+				});
+			});
+
+			wss.on('error', function(err) {
+				logMessage('ERROR', 'Server error: ' + (err.message || String(err)), true);
+			});
+
+			// Heartbeat: detect and clean up stale/orphaned connections
+			pingInterval = setInterval(function() {
+				clients.forEach(function(ws) {
+					if (ws.isAlive === false) {
+						logMessage('INFO', 'Terminating stale client (no pong response)');
+						clients.delete(ws);
+						ws.terminate();
+						status({ hook: 'ok' });
+						return;
+					}
+					ws.isAlive = false;
+					try { ws.ping(); } catch (e) {}
+				});
+			}, 30000);
+
+			upgradeHandler = function(req, socket, head) {
+
+				var pathname = _URL.parse(req.url).pathname || '';
+
+				var normPathname = pathname.replace(/\/+$/, '') || '/';
+				var normEndpoint = endpoint.replace(/\/+$/, '') || '/';
+
+				if (normPathname !== normEndpoint) {
+					return;
+				}
+
+				var _destroy = socket.destroy;
+				var _end     = socket.end;
+
+				socket.destroy = function() { return socket; };
+				socket.end     = function() { return socket; };
+
+				wss.handleUpgrade(req, socket, head, function(ws) {
+
+					wss.emit('connection', ws, req);
+
+					setTimeout(function() {
+						socket.destroy = _destroy;
+						socket.end     = _end;
+					}, 100);
+
+				});
+			};
+
+			F.server.prependListener('upgrade', upgradeHandler);
+			status({ hook: 'ok' });
+		};
+
+		instance.close = function() {
+			if (pingInterval) {
+				clearInterval(pingInterval);
+				pingInterval = null;
+			}
+			if (upgradeHandler && global && global.F && global.F.server) {
+				try { global.F.server.removeListener('upgrade', upgradeHandler); } catch (e) {}
+				upgradeHandler = null;
+			}
+			if (wss) {
+				try {
+					clients.forEach(function(c) { try { c.terminate(); } catch (e) {} });
+					wss.close();
+				} catch (e) {}
+				wss = null;
+			}
+			clients.clear();
+			status();
+		};
+
+		instance.configure();
+		status();
+	};
+
+</script>
+
+<settings>
+	<script>
+		var timezones = [
+			'UTC',
+			'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+			'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+			'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+			'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+			'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+			'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+			'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+			'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+			'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+			'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+			'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+			'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+		];
+	</script>
+
+	<div class="padding">
+		<div class="row">
+			<div class="col-md-6 m">
+				<ui-component name="input" path="?.endpoint" config="required:1">Endpoint</ui-component>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-12 m">
+				<div class="help">Serves on the same port as this Flow instance. Jambonz webhook URL: <b>ws://&lt;host&gt;:&lt;port&gt;&lt;endpoint&gt;</b><br>Automatically negotiates <code>Sec-WebSocket-Protocol: jambonz.jambonz.org</code>.</div>
+			</div>
+		</div>
+
+		<details class="maintenance-details">
+			<summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+			<div class="maintenance-content">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+					</div>
+				</div>
+
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+					</div>
+				</div>
+
+				<div class="row">
+					<div class="col-md-6 m maintenance-checkbox-group">
+						<ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+						<ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+					</div>
+					<div class="col-md-6">
+						<div class="timezone-field-wrapper m">
+							<ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+							<ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+						</div>
+					</div>
+				</div>
+			</div>
+		</details>
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #c85a5a !important; }
+	.CLASS header { background-color: #c85a5a; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+	.CLASS footer { padding: 10px; font-size: 12px; display: block; }
+
+	/* Fix directory dropdown positioning */
+	#flow_settings .ui-directory {
+		position: fixed !important;
+	}
+
+	/* Section styling */
+	.section-header {
+		font-size: 16px !important;
+		margin-bottom: 8px;
+		padding-top: 4px;
+	}
+
+	.section-divider {
+		margin-bottom: 20px !important;
+	}
+
+	/* Timezone field wrapper */
+	.timezone-field-wrapper {
+		width: 65%;
+	}
+
+	.timezone-field-wrapper .ui-input-label {
+		font-size: inherit !important;
+		color: inherit !important;
+	}
+
+	/* Maintenance collapsible section — default collapsed */
+	.maintenance-details {
+		margin-top: 12px;
+		border: none;
+	}
+	.maintenance-summary {
+		cursor: pointer;
+		list-style: none;
+		font-size: 16px;
+		padding: 4px 0 8px;
+		user-select: none;
+	}
+	.maintenance-summary::-webkit-details-marker { display: none; }
+	.maintenance-summary::before {
+		content: '\25B6';
+		display: inline-block;
+		margin-right: 10px;
+		transition: transform 0.15s ease;
+	}
+	.maintenance-details[open] .maintenance-summary::before {
+		transform: rotate(90deg);
+	}
+	.maintenance-content {
+		padding-top: 8px;
+		padding-bottom: 4px;
+	}
+	.maintenance-checkbox-group .ui-input {
+		display: block;
+		margin-bottom: 20px;
+	}
+	.maintenance-checkbox-group .ui-input:last-child {
+		margin-bottom: 0;
+	}
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+	<footer>
+		<div>Clients: <ui-bind path="$STATUS.online" config="text" class="monospace b"></ui-bind></div>
+		<div>Endpoint: <ui-bind path="$CONFIG.endpoint" config="text" class="monospace b"></ui-bind></div>
+	</footer>
+</body>
+
+<readme>
+# Jambonz [WS router]
+https://docs.jambonz.org/webhooks/websocket-api
+
+WebSocket endpoint for Jambonz call routing that correctly negotiates `Sec-WebSocket-Protocol: jambonz.jambonz.org` — on the **same port** as the Flow application.
+
+## Outputs
+
+- **FLOW** — Filtered JSON emitted only for `session:new`, `session:reconnect`, `verb:hook`, and `dial:confirm` event types. Core fields: `type`, `msgid`, `jbz_call_sid`, `direction`, `jbz_app_sid`, `ani`, `dnis`, `jbz_call_id`, `sip_call_id`, `trunk`. When present: `step_num` and `flowPath` (from `data.customerData`). When an ASR result is available (e.g. `verb:hook` from a gather): `asr_confidence` (number) and `asr_transcript` (string, or integer when the transcript is a whole number such as an age).
+- **raw** — Original message as received, without any transformation (all event types)
+- **Debug** — Formatted debug/error messages (when "Send to Debug output" options are enabled)
+
+## How it works
+Uses `ws` module with `noServer: true` and `handleProtocols` to produce the correct 101 handshake. The component hooks into `F.server`'s `upgrade` event via `prependListener` (runs **before** Total.js) and handles the full WebSocket lifecycle itself.
+
+## Maintenance
+
+Enable **Enable component debug** to activate diagnostic logging. Options:
+
+- **Send Name and ID** — Include component name and unique instance ID in log lines
+- **Timestamp (ISO 8601)** — Prepend timestamp in the configured timezone
+- **Timezone** — UTC (default), GMT offsets, or IANA identifiers (with DST)
+- **JSON output** — Structured JSON format instead of plain text
+- **Send debug to Debug output** — Route debug messages to the Debug output instead of console
+- **Send errors to Debug output** — Route error messages to the Debug output instead of console
+
+### Plain text format
+`<timestamp> <component> [<nodeId>] <LEVEL>   <message>`
+
+### JSON format
+`{"time":"...","component":"...","nodeId":"[...]","level":"...","message":"..."}`
+
+## Jambonz Messaging Rules
+Jambonz uses a strict **Ack/Command** pattern over text frames:
+1. Jambonz connects and immediately sends a `session:new` JSON payload containing a `msgid`.
+2. Your flow **MUST** reply with a JSON payload where `type` is `ack` and the `msgid` matches. Downstream components send responses directly to the WebSocket client via `$.refs.client`.
+</readme>
