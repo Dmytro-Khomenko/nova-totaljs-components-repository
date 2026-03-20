@@ -1,0 +1,173 @@
+<script total>
+
+	exports.id = 'common_stepper_advanced';
+	exports.name = 'Stepper [advanced]';
+	exports.group = 'Common';
+	exports.version = '1.3.1';
+	exports.icon = 'ti ti-pointer';
+	exports.author = 'Demon';
+	exports.inputs = [{ id: 'input', name: 'Input' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }];
+	exports.config = { autoclean: 3600 };
+
+	exports.make = function(instance, config) {
+
+		var items = [];
+		var status = { pending: 0 };
+		var cleanTimer = null;
+
+		function scheduleAutoclean() {
+			if (cleanTimer) {
+				clearTimeout(cleanTimer);
+				cleanTimer = null;
+			}
+			var timeout = config.autoclean >> 0;
+			if (timeout > 0 && items.length > 0) {
+				cleanTimer = setTimeout(function() {
+					cleanTimer = null;
+					for (let $ of items)
+						$.destroy();
+					items = [];
+					instance.checkstatus();
+				}, timeout * 1000);
+			}
+		}
+
+		instance.checkstatus = function() {
+			status.pending = items.length;
+			instance.status(status, 1000);
+		};
+
+		instance.vary = instance.configure = function() {
+			scheduleAutoclean();
+		};
+
+		instance.trigger = function(data) {
+			var action = data && data.action;
+			if (action === 'first') {
+				var msg = items.shift();
+				if (msg) {
+					instance.checkstatus();
+					msg.send('output');
+				}
+			} else if (action === 'clean') {
+				if (cleanTimer) {
+					clearTimeout(cleanTimer);
+					cleanTimer = null;
+				}
+				for (let $ of items)
+					$.destroy();
+				items = [];
+				instance.checkstatus();
+			} else {
+				// 'last' or no action — LIFO default
+				var msg = items.pop();
+				if (msg) {
+					instance.checkstatus();
+					msg.send('output');
+				}
+			}
+			// reschedule if messages still remain
+			if (items.length)
+				scheduleAutoclean();
+			else if (cleanTimer) {
+				clearTimeout(cleanTimer);
+				cleanTimer = null;
+			}
+		};
+
+		instance.message = function($) {
+			items.push($);
+			instance.checkstatus();
+			scheduleAutoclean();
+		};
+
+		instance.close = function() {
+			if (cleanTimer) {
+				clearTimeout(cleanTimer);
+				cleanTimer = null;
+			}
+			for (let $ of items)
+				$.destroy();
+			items = null;
+		};
+
+	};
+
+</script>
+
+<script>
+	// Data must be a plain Object — FUNC.trigger nulls anything with constructor !== Object
+	function stepperGetId(el) {
+		return el.closest('[data-id]').attr('data-id');
+	}
+
+	FUNC.stepperFirst = function(el) {
+		FUNC.trigger(stepperGetId(el), { action: 'first' });
+	};
+	FUNC.stepperLast = function(el) {
+		FUNC.trigger(stepperGetId(el), { action: 'last' });
+	};
+	FUNC.stepperClean = function(el) {
+		FUNC.trigger(stepperGetId(el), { action: 'clean' });
+	};
+</script>
+
+<settings>
+	<div class="padding">
+		<div class="grid-3">
+			<div>
+				<ui-component name="input" path="?.autoclean" config="type:number;min:0;placeholder:3600" class="m">Autoclean timeout (s):</ui-component>
+			</div>
+		</div>
+		<div class="help">Automatically destroys all buffered messages after this many seconds of inactivity. Set to <b>0</b> to disable.</div>
+	</div>
+</settings>
+
+<style>
+	.CLASS .status { font-size: 12px; margin: 0; padding: 10px; }
+	.CLASS .status ui-bind { color: #A0A0A0; }
+	.CLASS .padding { padding: 10px; display: flex; flex-direction: column; gap: 4px; margin-top: 4px; border-top: 1px solid #E0E0E0; }
+	.ui-dark .CLASS .padding { border-top-color: #333; }
+	.CLASS button { width: 100%; height: 24px; border: 1px solid #E0E0E0; border-radius: var(--radius); color: #000; background-color: #F0F0F0; margin: 0; }
+	.CLASS button:hover { background-color: #F8F8F8; }
+	.CLASS button:active { background-color: #E0E0E0; }
+	.CLASS button.danger { border-color: #E0C0C0; color: #900; background-color: #FFF0F0; }
+	.CLASS button.danger:hover { background-color: #FFE0E0; }
+	.CLASS button.danger:active { background-color: #F0C0C0; }
+	.ui-dark .CLASS .status ui-bind { color: #777; }
+	.ui-dark .CLASS button { border-color: #404040; color: #FFF; background-color: #222; }
+	.ui-dark .CLASS button:hover { background-color: #303030; }
+	.ui-dark .CLASS button:active { background-color: #404040; }
+	.ui-dark .CLASS button.danger { border-color: #602020; color: #F88; background-color: #2A1010; }
+	.ui-dark .CLASS button.danger:hover { background-color: #381515; }
+	.ui-dark .CLASS button.danger:active { background-color: #481A1A; }
+</style>
+
+<readme>
+The component postpones incoming messages. Messages accumulate in a buffer and can be released manually.
+
+- **Release First** — sends the oldest buffered message (FIFO)
+- **Release Last** — sends the newest buffered message (LIFO)
+- **Clean all** — destroys all buffered messages without sending
+
+## Configuration
+
+- **Autoclean timeout (s)** — automatically destroys all buffered messages after this many seconds since the last message arrived. Set to `0` to disable. Default: `3600`.
+</readme>
+
+<body>
+	<header>
+		<i class="ICON"></i>NAME
+	</header>
+	<div class="padding">
+		<button class="exec" data-exec="FUNC.stepperFirst">Release First</button>
+		<button class="exec" data-exec="FUNC.stepperLast">Release Last</button>
+		<button class="exec danger" data-exec="FUNC.stepperClean">Clean all</button>
+	</div>
+	<footer>
+		<div class="status">
+			<div>Postponed messages: <b><ui-bind path="STATUS.pending" config="text:value?value.format(0):'0'"></ui-bind></b></div>
+		</div>
+	</footer>
+</body>
