@@ -7,7 +7,7 @@
     exports.group = 'Jambonz';
     exports.icon = 'ti ti-atom';
     exports.author = 'Demon';
-    exports.version = '3.1.2';
+    exports.version = '3.2.0';
     exports.config = {
         audioType: 'say',
         prompt: '',
@@ -28,7 +28,7 @@
         debug_timezone: 'UTC',
         debug_json: false
     };
-    exports.inputs = [{ id: 'input', name: 'Input' }];
+    exports.inputs = [{ id: 'input', name: 'Input' }, { id: 'repeat', name: 'Repeat' }];
     exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
 
     exports.make = function(instance, config) {
@@ -222,12 +222,25 @@
             }
 
             var nodeId = instance.id;
+
+            // Repeat input: trim flowPath to remove own ID and all IDs after it, increment loop_num
+            if ($.input === 'repeat') {
+                var repeatPath = Array.isArray(data.flowPath) ? data.flowPath : [];
+                var ownIdx = repeatPath.indexOf(nodeId);
+                if (ownIdx !== -1) {
+                    data.flowPath = repeatPath.slice(0, ownIdx);
+                }
+                data.loop_num = (typeof data.loop_num === 'number' ? data.loop_num : 0) + 1;
+                logMessage('DEBUG', 'Repeat input — trimmed flowPath to ' + JSON.stringify(data.flowPath) + ', loop_num: ' + data.loop_num);
+            }
+
             var flowPath = Array.isArray(data.flowPath) ? data.flowPath : null;
             var stepNum = data.step_num;
+            var loopNum = typeof data.loop_num === 'number' ? data.loop_num : 0;
             var hasFlowPath = flowPath && flowPath.length > 0;
             var hasStepNum = stepNum !== undefined && stepNum !== null;
 
-            logMessage('DEBUG', 'Received message (type: ' + (data.type || 'n/a') + ', msgid: ' + (data.msgid || 'n/a') + ', flowPath: ' + JSON.stringify(flowPath) + ', step_num: ' + stepNum + ')');
+            logMessage('DEBUG', 'Received message (type: ' + (data.type || 'n/a') + ', msgid: ' + (data.msgid || 'n/a') + ', flowPath: ' + JSON.stringify(flowPath) + ', step_num: ' + stepNum + ', loop_num: ' + loopNum + ')');
 
             // Case C: flowPath contains current node ID — pass through
             if (hasFlowPath && hasStepNum && flowPath.indexOf(nodeId) !== -1) {
@@ -292,7 +305,7 @@
                 var newStepNum = (typeof stepNum === 'number' ? stepNum : parseInt(stepNum, 10)) + 1;
 
                 var verbsB = [
-                    { verb: 'tag', data: { step_num: newStepNum, flowPath: newFlowPath } },
+                    { verb: 'tag', data: { step_num: newStepNum, loop_num: loopNum, flowPath: newFlowPath } },
                     audioVerb
                 ];
 
@@ -302,11 +315,11 @@
                     verbsB.push(gatherVerb);
 
                 response = { type: 'ack', msgid: msgid, data: verbsB };
-                logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + newStepNum + ', isLastNode: ' + isLastNode + ')');
+                logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + newStepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
             } else {
                 // Case A: no flowPath or empty flowPath — first handler in chain
                 var verbsA = [
-                    { verb: 'tag', data: { step_num: 0, flowPath: [nodeId] } },
+                    { verb: 'tag', data: { step_num: 0, loop_num: loopNum, flowPath: [nodeId] } },
                     { verb: 'answer' },
                     audioVerb
                 ];
@@ -317,7 +330,7 @@
                     verbsA.push(gatherVerb);
 
                 response = { type: 'ack', msgid: msgid, data: verbsA };
-                logMessage('INFO', 'Case A — first in chain (isLastNode: ' + isLastNode + ')');
+                logMessage('INFO', 'Case A — first in chain (loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
             }
 
             if (ws && ws.readyState === 1) {
@@ -548,6 +561,7 @@ This component adds a Jambonz `say` or `play` verb to the websocket flow using t
 ## Inputs / Outputs
 
 - **Input** — Receives filtered messages from `jambonz_ws_router` FLOW output
+- **Repeat** — Re-enters this node: trims `flowPath` to remove this node's ID and all subsequent IDs, increments `loop_num`, then processes normally (allowing the node and all nodes after it to execute again)
 - **Output** — Pass-through for messages where this node has already been visited (connect to next flow node)
 - **debug** — Formatted debug/error messages (when "Send to Debug output" options are enabled)
 
@@ -557,9 +571,10 @@ Ack responses are sent directly to the Jambonz websocket client via `$.refs.clie
 
 Each node self-selects whether to handle or pass through based on the `flowPath` array in the incoming `tag` data:
 
-1. **No flowPath / empty** (first call, `session:new`): Responds with `answer` + audio verb wrapped in an ack, including a `tag` verb with `flowPath: [nodeId]` and `step_num: 0`
+1. **No flowPath / empty** (first call, `session:new`): Responds with `answer` + audio verb wrapped in an ack, including a `tag` verb with `flowPath: [nodeId]`, `step_num: 0`, and `loop_num: 0`
 2. **flowPath exists, node NOT in it** (subsequent event): Appends its nodeId to `flowPath`, increments `step_num`, responds with audio verb in ack
 3. **flowPath exists, node IS in it** (already visited): Passes message through to Output unchanged
+4. **Repeat input**: Trims `flowPath` to remove this node's ID and everything after it, increments `loop_num` by 1, then continues with normal processing — effectively re-running this node and all subsequent nodes in the chain
 
 In **Say** mode a trailing `gather` verb is appended to trigger the next `session:reconnect`. In **Play** mode the play verb's own `actionHook` triggers the next event.
 
