@@ -182,7 +182,7 @@
   {
     "id": "jambonz_ws_gather",
     "group": "Jambonz",
-    "name": "jambonz_ws_gather",
+    "name": "Jambonz [WS] gather",
     "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Jambonz/jambonz_ws_gather.html",
     "author": "Demon",
     "icon": "ti ti-atom",
@@ -194,7 +194,7 @@
   {
     "id": "jambonz_ws_prompt",
     "group": "Jambonz",
-    "name": "jambonz_ws_prompt",
+    "name": "Jambonz [WS] prompt",
     "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Jambonz/jambonz_ws_prompt.html",
     "author": "Demon",
     "icon": "ti ti-atom",
@@ -206,7 +206,7 @@
   {
     "id": "jambonz_ws_router",
     "group": "Jambonz",
-    "name": "jambonz_ws_router",
+    "name": "Jambonz [WS] router",
     "url": "https://Dmytro-Khomenko.github.io/nova-totaljs-components-repository/components/Jambonz/jambonz_ws_router.html",
     "author": "Demon",
     "icon": "ti ti-atom",
