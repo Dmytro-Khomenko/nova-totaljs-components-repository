@@ -7,7 +7,7 @@
     exports.group = 'Jambonz';
     exports.icon = 'ti ti-atom';
     exports.author = 'Demon';
-    exports.version = '3.2.0';
+    exports.version = '3.2.5';
     exports.config = {
         audioType: 'say',
         prompt: '',
@@ -353,6 +353,7 @@
         <script>
             // Dropdown options - MODIFY ONLY THESE ARRAYS TO CHANGE OPTIONS
             var vendors = ['AssemblyAI', 'AWS', 'Cartesia', 'Cobalt', 'Custom', 'Deepgram', 'ElevenLabs', 'Google', 'IBM', 'Microsoft', 'Nuance', 'Nvidia', 'OpenAI', 'PlayHT', 'RimeLabs', 'Soniox', 'Speechmatics', 'Verbio', 'Voxist', 'WellSaid', 'Whisper'];
+
             var languages = ['uk-UA', 'ru-RU', 'en-US'];
             var timezones = [
                 'UTC',
@@ -378,6 +379,11 @@
             <div class="row">
                 <div class="col-md-6 m">
                     <ui-component name="input" path="?.audioType" config="dirsource:say|Say,play|Play">Audio Type</ui-component>
+                </div>
+                <div class="col-md-6">
+                    <div class="tts-partial-warning hidden" data-bind="?.audioType__show:value === 'say'">
+                        <b>Attention !</b><br>Leave empty or must set all three (Vendor, Language, Voice).
+                    </div>
                 </div>
             </div>
 
@@ -525,6 +531,25 @@
     }
     .maintenance-checkbox-group .ui-input:last-child {
         margin-bottom: 0;
+    }
+
+    /* TTS partial-fill warning */
+    .tts-partial-warning {
+        margin: 20px 0px 0px 0px;
+        padding: 2px 8px;
+        background: #fff8e1;
+        border-left: 3px solid #d4a017;
+        border-radius: 3px;
+        font-size: 12px;
+        color: #7a5c00;
+    }
+    .ui-dark .tts-partial-warning {
+        background: #3a3010;
+        border-left-color: #d4a017;
+        color: #f0c040;
+    }
+    .tts-partial-warning i {
+        margin-right: 4px;
     }
 
     /* Footer */
