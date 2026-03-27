@@ -7,10 +7,15 @@
 	exports.group = 'Jambonz';
 	exports.icon = 'ti ti-atom';
 	exports.author = 'Demon';
-	exports.version = '5.3.0';
+	exports.version = '5.10.1';
+	exports.npm = ['redis'];
 
 	exports.config = {
 		endpoint: '/ws/call',
+		cdr_host: '',
+		cdr_database: 0,
+		cdr_password: '',
+		cdr_ttl: 3600,
 		debug_enabled: false,
 		debug_nameid: true,
 		debug_to_output: false,
@@ -21,11 +26,13 @@
 	};
 
 	exports.inputs  = [];
-	exports.outputs = [{ id: 'flow', name: 'FLOW' }, { id: 'raw', name: 'raw' }, { id: 'debug', name: 'debug' }];
+	exports.outputs = [{ id: 'flow', name: 'FLOW output' }, { id: 'raw', name: 'raw stream' }, { id: 'debug', name: 'debug' }];
 
 	var _WS;
 	try { _WS = require('ws'); } catch (e) {}
-	var _URL = require('url');
+	var _URL  = require('url');
+	var _redis;
+	try { _redis = require('redis'); } catch (e) {}
 
 	exports.make = function(instance, config) {
 
@@ -33,6 +40,336 @@
 		var clients        = new Set();
 		var upgradeHandler = null;
 		var pingInterval   = null;
+
+		// ── CDR (Redis) ──────────────────────────────────────────────────────
+		var cdrClient    = null;
+		var cdrConnected = false;
+
+		var resolveCdrValue = function(expr) {
+			if (typeof expr !== 'string') return expr;
+			return expr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+				if (expression.startsWith('$FLOW_VARS.')) {
+					var key = expression.substring(11);
+					var val;
+					if (instance.main && instance.main.variables)  val = instance.main.variables[key];
+					if ((val === undefined || val === null) && instance.main && instance.main.variables2) val = instance.main.variables2[key];
+					return (val !== undefined && val !== null) ? val : match;
+				}
+				return match;
+			});
+		};
+
+		var cdrDisconnect = function() {
+			if (cdrClient) {
+				try { cdrClient.quit().catch(function() {}); } catch (e) {}
+				cdrClient    = null;
+				cdrConnected = false;
+			}
+		};
+
+		var cdrConnect = function(callback) {
+			if (cdrClient && cdrConnected) { callback(null, cdrClient); return; }
+			if (!_redis) { callback('redis module not available'); return; }
+
+			var cfg      = instance.replace(config);
+			var rawHost  = resolveCdrValue(cfg.cdr_host || '');
+			var password = resolveCdrValue(cfg.cdr_password || '');
+
+			if (!rawHost) { callback('CDR host not configured'); return; }
+
+			var host     = rawHost;
+			var port     = 6379;
+			var colonIdx = rawHost.lastIndexOf(':');
+			if (colonIdx !== -1) {
+				var maybePort = parseInt(rawHost.substring(colonIdx + 1), 10);
+				if (!isNaN(maybePort)) {
+					host = rawHost.substring(0, colonIdx);
+					port = maybePort;
+				}
+			}
+
+			var redisCfg = {
+				socket:   { host: host, port: port },
+				database: config.cdr_database !== undefined ? parseInt(config.cdr_database, 10) || 0 : 0
+			};
+			if (password && password.trim()) redisCfg.password = password;
+
+			cdrClient = _redis.createClient(redisCfg);
+			cdrClient.on('error', function(err) {
+				cdrConnected = false;
+				logMessage('ERROR', 'CDR Redis error: ' + (err.message || String(err)), true);
+			});
+
+			cdrClient.connect().then(function() {
+				cdrConnected = true;
+				logMessage('INFO', 'CDR Redis connected to ' + host + ':' + port);
+				callback(null, cdrClient);
+			}).catch(function(err) {
+				cdrConnected = false;
+				logMessage('ERROR', 'CDR Redis connect failed: ' + (err.message || String(err)), true);
+				callback(err);
+			});
+		};
+
+		var buildCdrPayload = function(msg) {
+			var d   = msg.data || {};
+			var cs  = d.call_status;
+			var now = new Date().toISOString();
+
+			if (cs === 'trying') {
+				var callId = String(d.call_id || '');
+				return {
+					_id:          callId,
+					_isProcessed: 'false',
+					sip_call_id:  String(d.sbc_callid || ''),
+					jbz_call_id:  callId,
+					jbz_call_sid: String(d.call_sid || ''),
+					jbz_app_sid:  String(d.application_sid || ''),
+					trunk:        String(d.originating_sip_trunk_name || ''),
+					direction:    String(d.direction || ''),
+					ani:          String(d.from || ''),
+					dnis:         String(d.to || ''),
+					dialog_start: now
+				};
+			}
+
+			if (cs === 'completed') {
+				var cd = d.customerData || {};
+				var callId2 = String(d.call_id || '');
+				return {
+					_id:           callId2,
+					_isProcessed:  'false',
+					sip_call_id:   String(d.sbc_callid || ''),
+					jbz_call_id:   callId2,
+					jbz_call_sid:  String(d.call_sid || ''),
+					jbz_app_sid:   String(d.application_sid || ''),
+					trunk:         String(d.originating_sip_trunk_name || ''),
+					direction:     String(d.direction || ''),
+					ani:           String(d.from || ''),
+					dnis:          String(d.to || ''),
+					sip_status:    String(d.sip_status || ''),
+					sip_reason:    String(d.sip_reason || ''),
+					call_status:   String(d.call_status || ''),
+					terminated_by: String(d.call_termination_by || ''),
+					steps:         String(cd.step_num !== undefined ? cd.step_num : ''),
+					dialog_end:    now
+				};
+			}
+
+			return null;
+		};
+
+		var buildCdrAckPayload = function(msg) {
+			var tagData = null;
+
+			if (msg.verb === 'tag' && msg.data && typeof msg.data === 'object' && !Array.isArray(msg.data)) {
+				tagData = msg.data;
+			} else if (Array.isArray(msg.data)) {
+				for (var i = 0; i < msg.data.length; i++) {
+					if (msg.data[i] && msg.data[i].verb === 'tag' && msg.data[i].data) {
+						tagData = msg.data[i].data;
+						break;
+					}
+				}
+			}
+
+			if (!tagData || !tagData.jbz_call_id) return null;
+
+			var payload = {};
+			for (var k in tagData) {
+				if (Object.prototype.hasOwnProperty.call(tagData, k) && k !== 'flowPath' && k !== 'vendor' && k !== 'language' && k !== 'voice') {
+					payload[k] = tagData[k];
+				}
+			}
+			var stepId = payload.jbz_call_id + '-' + (payload.step_num !== undefined ? payload.step_num : 0);
+			payload._id          = stepId;
+			payload._isProcessed = 'false';
+			payload.step_start   = new Date().toISOString();
+
+			return payload;
+		};
+
+		var processCdr = function(msg) {
+			if (!msg || msg.type !== 'call:status') return;
+			var cs = (msg.data || {}).call_status;
+			if (cs !== 'trying' && cs !== 'completed') return;
+
+			var cfg     = instance.replace(config);
+			var cdrHost = resolveCdrValue(cfg.cdr_host || '');
+			if (!cdrHost) return;
+
+			var payload = buildCdrPayload(msg);
+			if (!payload || !payload.jbz_call_id) return;
+
+			var hashKey = 'dialog-' + payload.jbz_call_id;
+			var ttl     = parseInt(cfg.cdr_ttl, 10) || 0;
+
+			cdrConnect(function(err, rc) {
+				if (err) {
+					logMessage('ERROR', 'CDR connect error: ' + (typeof err === 'object' ? err.message || String(err) : String(err)), true);
+					return;
+				}
+
+				var args = [];
+				for (var field in payload) {
+					if (Object.prototype.hasOwnProperty.call(payload, field)) {
+						args.push(field);
+						args.push(payload[field] !== null && payload[field] !== undefined ? String(payload[field]) : '');
+					}
+				}
+
+				rc.hSet(hashKey, args).then(function() {
+					logMessage('DEBUG', 'CDR HSET [' + cs + '] → ' + hashKey);
+					if (ttl > 0) {
+						rc.expire(hashKey, ttl).catch(function(e) {
+							logMessage('ERROR', 'CDR TTL failed: ' + (e.message || String(e)), true);
+						});
+					}
+					if (cs === 'completed') {
+						var stepPayload = {
+							_id:            payload.jbz_call_id + '-' + payload.steps,
+							_isProcessed:   'false',
+							sip_call_id:    payload.sip_call_id,
+							jbz_call_id:    payload.jbz_call_id,
+							asr_confidence: '0',
+							asr_transcript: 'none',
+							step_end:       payload.dialog_end
+						};
+						var stepKey  = 'step-' + payload.jbz_call_id + '-' + payload.steps;
+						var stepArgs = [];
+						for (var sf in stepPayload) {
+							if (Object.prototype.hasOwnProperty.call(stepPayload, sf)) {
+								stepArgs.push(sf);
+								stepArgs.push(stepPayload[sf] !== null && stepPayload[sf] !== undefined ? String(stepPayload[sf]) : '');
+							}
+						}
+						rc.hSet(stepKey, stepArgs).then(function() {
+							logMessage('DEBUG', 'CDR HSET [completed/step] → ' + stepKey);
+							if (ttl > 0) {
+								rc.expire(stepKey, ttl).catch(function(e) {
+									logMessage('ERROR', 'CDR TTL failed (step): ' + (e.message || String(e)), true);
+								});
+							}
+						}).catch(function(e) {
+							logMessage('ERROR', 'CDR HSET failed (completed/step): ' + (e.message || String(e)), true);
+						});
+					}
+				}).catch(function(e) {
+					logMessage('ERROR', 'CDR HSET failed: ' + (e.message || String(e)), true);
+				});
+			});
+		};
+		var processCdrAck = function(msg) {
+			if (!msg || msg.type !== 'ack') return;
+
+			var cfg     = instance.replace(config);
+			var cdrHost = resolveCdrValue(cfg.cdr_host || '');
+			if (!cdrHost) return;
+
+			var payload = buildCdrAckPayload(msg);
+			if (!payload || !payload.jbz_call_id) return;
+
+			var step    = payload.step_num !== undefined ? payload.step_num : 0;
+			var hashKey = 'step-' + payload.jbz_call_id + '-' + step;
+			var ttl     = parseInt(cfg.cdr_ttl, 10) || 0;
+
+			cdrConnect(function(err, rc) {
+				if (err) {
+					logMessage('ERROR', 'CDR connect error (ack): ' + (typeof err === 'object' ? err.message || String(err) : String(err)), true);
+					return;
+				}
+
+				var args = [];
+				for (var field in payload) {
+					if (Object.prototype.hasOwnProperty.call(payload, field)) {
+						args.push(field);
+						args.push(payload[field] !== null && payload[field] !== undefined ? String(payload[field]) : '');
+					}
+				}
+
+				rc.hSet(hashKey, args).then(function() {
+					logMessage('DEBUG', 'CDR HSET [ack/tag] → ' + hashKey);
+					if (ttl > 0) {
+						rc.expire(hashKey, ttl).catch(function(e) {
+							logMessage('ERROR', 'CDR TTL failed: ' + (e.message || String(e)), true);
+						});
+					}
+				}).catch(function(e) {
+					logMessage('ERROR', 'CDR HSET failed (ack): ' + (e.message || String(e)), true);
+				});
+			});
+		};
+		var buildCdrVerbHookPayload = function(msg) {
+			var d  = msg.data || {};
+			var cd = d.customerData || {};
+
+			if (!cd.jbz_call_id) return null;
+
+			var step   = cd.step_num !== undefined ? cd.step_num : 0;
+			var stepId = String(cd.jbz_call_id) + '-' + step;
+
+			var asr_confidence = 0;
+			var asr_transcript = 'none';
+			var speech = d.speech;
+			if (speech && Array.isArray(speech.alternatives) && speech.alternatives.length > 0) {
+				var alt = speech.alternatives[0];
+				if (alt.confidence !== undefined) asr_confidence = Math.round(alt.confidence * 100) / 100;
+				if (alt.transcript !== undefined) asr_transcript = String(alt.transcript);
+			}
+
+			return {
+				_id:            stepId,
+				_isProcessed:   'false',
+				sip_call_id:    String(cd.sip_call_id || ''),
+				jbz_call_id:    String(cd.jbz_call_id || ''),
+				step_num:       step,
+				asr_confidence: asr_confidence,
+				asr_transcript: asr_transcript,
+				step_end:       new Date().toISOString()
+			};
+		};
+
+		var processCdrVerbHook = function(msg) {
+			if (!msg || msg.type !== 'verb:hook') return;
+
+			var cfg     = instance.replace(config);
+			var cdrHost = resolveCdrValue(cfg.cdr_host || '');
+			if (!cdrHost) return;
+
+			var payload = buildCdrVerbHookPayload(msg);
+			if (!payload || !payload.jbz_call_id) return;
+
+			var hashKey = 'step-' + payload.jbz_call_id + '-' + payload.step_num;
+			var ttl     = parseInt(cfg.cdr_ttl, 10) || 0;
+
+			cdrConnect(function(err, rc) {
+				if (err) {
+					logMessage('ERROR', 'CDR connect error (verb:hook): ' + (typeof err === 'object' ? err.message || String(err) : String(err)), true);
+					return;
+				}
+
+				var args = [];
+				for (var field in payload) {
+					if (Object.prototype.hasOwnProperty.call(payload, field)) {
+						args.push(field);
+						args.push(payload[field] !== null && payload[field] !== undefined ? String(payload[field]) : '');
+					}
+				}
+
+				rc.hSet(hashKey, args).then(function() {
+					logMessage('DEBUG', 'CDR HSET [verb:hook] → ' + hashKey);
+					if (ttl > 0) {
+						rc.expire(hashKey, ttl).catch(function(e) {
+							logMessage('ERROR', 'CDR TTL failed: ' + (e.message || String(e)), true);
+						});
+					}
+				}).catch(function(e) {
+					logMessage('ERROR', 'CDR HSET failed (verb:hook): ' + (e.message || String(e)), true);
+				});
+			});
+		};
+				// ── end CDR ──────────────────────────────────────────────────────────
 
 		var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
 
@@ -123,24 +460,30 @@
 		};
 
 		var buildFlowMessage = function(msg) {
-			if (!msg || typeof msg !== 'object') return msg;
-			var d = msg.data || {};
-			var result = {
-				type: msg.type || '',
-				msgid: msg.msgid || '',
-				jbz_call_sid: String(msg.call_sid || ''),
-				direction: String(d.direction || ''),
-				jbz_app_sid: String(d.application_sid || ''),
-				ani: String(d.from || ''),
-				dnis: String(d.to || ''),
-				jbz_call_id: String(d.call_id || ''),
-				sip_call_id: String(d.sbc_callid || ''),
-				trunk: String(d.originating_sip_trunk_name || '')
-			};
+		if (!msg || typeof msg !== 'object') return msg;
+		var d    = msg.data || {};
+		var type = msg.type || '';
 
-			// customerData: flowPath tracking
-			var cd = d.customerData || {};
-			if (cd.step_num !== undefined) result.step_num = cd.step_num;
+		var result = {
+			type:      type,
+			msgid:     msg.msgid || '',
+			sip_call_id: String(d.sbc_callid || ''),
+			jbz_call_id: String(d.call_id || ''),
+			trunk:     String(d.originating_sip_trunk_name || ''),
+			direction: String(d.direction || ''),
+			ani:       String(d.from || ''),
+			dnis:      String(d.to || '')
+		};
+
+		if (type === 'session:new') {
+			result.step_num  = 1;
+			result.loop_num  = 0;
+			result.flowPath  = [];
+		} else {
+			var cd      = d.customerData || {};
+			var rawStep = cd.step_num !== undefined ? cd.step_num : 0;
+			result.step_num = (typeof rawStep === 'number' ? rawStep : parseInt(rawStep, 10) || 0) + 1;
+			result.loop_num = typeof cd.loop_num === 'number' ? cd.loop_num : 0;
 			if (Array.isArray(cd.flowPath)) result.flowPath = cd.flowPath;
 
 			// ASR results: prefer top-level speech.alternatives (Jambonz-normalised),
@@ -169,9 +512,10 @@
 					}
 				}
 			}
+		}
 
-			return result;
-		};
+		return result;
+	};
 
 		var status = function(extra) {
 			var s = { online: clients.size };
@@ -180,6 +524,8 @@
 		};
 
 		instance.configure = function() {
+
+			cdrDisconnect();
 
 			if (pingInterval) {
 				clearInterval(pingInterval);
@@ -248,6 +594,23 @@
 				ws.isAlive = true;
 				ws.on('pong', function() { ws.isAlive = true; });
 
+				// Intercept outgoing messages → also forward to raw output
+				var _wsSend = ws.send.bind(ws);
+				ws.send = function(data, options, callback) {
+					try {
+						var parsed = typeof data === 'string' ? JSON.parse(data) : data;
+						if (parsed && typeof parsed === 'object') {
+							var outMsg = instance.newmessage(Object.assign({ _direction: 'outbound' }, parsed));
+							outMsg.refs.client     = ws;
+							outMsg.refs.controller = wss;
+							if (parsed.msgid) outMsg.refs.msgid = parsed.msgid;
+							outMsg.send('raw');
+							if (parsed.type === 'ack') processCdrAck(parsed);
+						}
+					} catch (e) {}
+					return _wsSend(data, options, callback);
+				};
+
 				clients.add(ws);
 				status({ hook: 'ok' });
 
@@ -270,12 +633,16 @@
 						return;
 					}
 
-					// Send to raw output (as-is)
-					var rawMsg = instance.newmessage(processed);
+					// Send to raw output (inbound, as-is)
+					var rawMsg = instance.newmessage(Object.assign({ _direction: 'inbound' }, processed));
 					rawMsg.refs.client     = ws;
 					rawMsg.refs.controller = wss;
 					if (processed && processed.msgid) rawMsg.refs.msgid = processed.msgid;
 					rawMsg.send('raw');
+
+					// CDR recording
+					processCdr(processed);
+					processCdrVerbHook(processed);
 
 					// Send to FLOW output only for specific event types
 					var flowTypes = ['session:new', 'session:reconnect', 'verb:hook', 'dial:confirm'];
@@ -355,6 +722,7 @@
 		};
 
 		instance.close = function() {
+			cdrDisconnect();
 			if (pingInterval) {
 				clearInterval(pingInterval);
 				pingInterval = null;
@@ -410,6 +778,28 @@
 				<div class="help">Serves on the same port as this Flow instance. Jambonz webhook URL: <b>ws://&lt;host&gt;:&lt;port&gt;&lt;endpoint&gt;</b><br>Automatically negotiates <code>Sec-WebSocket-Protocol: jambonz.jambonz.org</code>.</div>
 			</div>
 		</div>
+
+		<details class="maintenance-details">
+			<summary class="maintenance-summary"><b>CDR Configuration</b></summary>
+			<div class="maintenance-content">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.cdr_host" config="type:text;placeholder:host\:port or {{ $FLOW_VARS.redis_host }};total:1">Host</ui-component>
+					</div>
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.cdr_database" config="type:number;min:0;increment:1;format:">Database Number</ui-component>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.cdr_password" config="type:password;placeholder:password or {{ $FLOW_VARS.redis_password }};total:1">Password</ui-component>
+					</div>
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.cdr_ttl" config="type:number;min:0;increment:1;format:">TTL (sec)</ui-component>
+					</div>
+				</div>
+			</div>
+		</details>
 
 		<details class="maintenance-details">
 			<summary class="maintenance-summary"><b>Debug Configuration</b></summary>
@@ -534,12 +924,30 @@ WebSocket endpoint for Jambonz call routing that correctly negotiates `Sec-WebSo
 
 ## Outputs
 
-- **FLOW** — Filtered JSON emitted only for `session:new`, `session:reconnect`, `verb:hook`, and `dial:confirm` event types. Core fields: `type`, `msgid`, `jbz_call_sid`, `direction`, `jbz_app_sid`, `ani`, `dnis`, `jbz_call_id`, `sip_call_id`, `trunk`. When present: `step_num` and `flowPath` (from `data.customerData`). When an ASR result is available (e.g. `verb:hook` from a gather): `asr_confidence` (number) and `asr_transcript` (string, or integer when the transcript is a whole number such as an age).
-- **raw** — Original message as received, without any transformation (all event types)
+- **FLOW output** — Filtered JSON emitted only for `session:new`, `session:reconnect`, `verb:hook`, and `dial:confirm` event types. Core fields: `type`, `msgid`, `sip_call_id`, `jbz_call_id`, `trunk`, `direction`, `ani`, `dnis`. Always includes `step_num`, `loop_num`, and `flowPath`. For `session:new`: `step_num` is always `1`, `loop_num` is `0`, `flowPath` is `[]`. For all other types: `step_num` is incremented by 1 from `customerData`, `loop_num` and `flowPath` are carried from `customerData`. When an ASR result is available (e.g. `verb:hook` from a gather): `asr_confidence` (number) and `asr_transcript` (string, or integer when the transcript is a whole number such as an age).
+- **raw stream** — All WebSocket traffic, both directions. Each message includes a `_direction` field: `"inbound"` for messages received from Jambonz (all event types, original data preserved), `"outbound"` for responses sent back to Jambonz.
 - **Debug** — Formatted debug/error messages (when "Send to Debug output" options are enabled)
 
 ## How it works
 Uses `ws` module with `noServer: true` and `handleProtocols` to produce the correct 101 handshake. The component hooks into `F.server`'s `upgrade` event via `prependListener` (runs **before** Total.js) and handles the full WebSocket lifecycle itself.
+
+## CDR Configuration
+
+Stores call detail records to Redis using `HASH:SET`. CDR recording is **disabled** when the `Host:` field is empty, and **enabled** when it contains a `host:port` value (e.g. `192.168.1.10:6379`).
+
+All fields support TotalJS template expressions such as `{{ $FLOW_VARS.redis_instance }}`.
+
+### Recorded events
+
+**`call:status` / `trying`** (inbound) — fields: `_id` (`jbz_call_id`), `_isProcessed` (`false`), `sip_call_id`, `jbz_call_id`, `jbz_call_sid`, `jbz_app_sid`, `trunk`, `direction`, `ani`, `dnis`, `dialog_start` (UTC ISO 8601). Hash key: `dialog-\<jbz_call_id\>`.
+
+**`call:status` / `completed`** (inbound) — fields: all `trying` fields replaced by `dialog_end`, plus `sip_status`, `sip_reason`, `call_status`, `terminated_by`, `steps` (from `data.customerData.step_num`). Hash key: `dialog-\<jbz_call_id\>`.
+
+**`verb:hook`** (inbound) — fields: `_id` (`jbz_call_id-step_num`), `_isProcessed` (`false`), `sip_call_id`, `jbz_call_id`, `step_num`, `asr_confidence` (2 d.p., default `0`), `asr_transcript` (default ``), `step_end` (UTC ISO 8601). Hash key: `step-<jbz_call_id>-<step_num>`.
+
+**`ack` / `verb:tag`** (outbound) — captured when an outbound `ack` message contains a `verb:"tag"` entry (at top level or inside the `data` array). All fields from the tag data object are stored as-is, except `flowPath` which is dropped. `_id` (`jbz_call_id-step_num`), `_isProcessed` (`false`), and `step_start` (UTC ISO 8601) are added automatically. Hash key: `step-\<jbz_call_id\>-\<step_num\>` (e.g. `step-3bf100d6-...-2`).
+
+TTL (seconds) is applied after each write if set to a value greater than 0.
 
 ## Maintenance
 

@@ -6,7 +6,7 @@
   exports.group = 'Jambonz';
   exports.icon = 'ti ti-atom';
   exports.author = 'Demon';
-  exports.version = '3.2.6';
+  exports.version = '3.6.0';
   exports.config = {
       vendor: 'Google',
       language: 'uk-UA',
@@ -24,6 +24,7 @@
       customSettingsJson: '',
       audioType: 'none',
       audioUrl: '',
+      playText: '',
       playTimeout: 0,
       playLoops: 1,
       playOffset: 0,
@@ -315,14 +316,9 @@
       };
 
       // Footer display helpers
-      var computePlayDisplay = function(url) {
-          if (!url || !url.trim()) return 'Play: undefined';
-          var trimmed = url.trim();
-          if (trimmed.charAt(trimmed.length - 1) === '/') return 'Play: incorrect';
-          var lastSlash = trimmed.lastIndexOf('/');
-          var filename = lastSlash >= 0 ? trimmed.substring(lastSlash + 1) : trimmed;
-          if (!filename) return 'Play: incorrect';
-          return 'Play: ' + filename;
+      var computePlayDisplay = function(text) {
+          if (!text || !text.trim()) return 'Play: undefined';
+          return 'Play: ' + text.trim();
       };
 
       var computeSayDisplay = function(text) {
@@ -336,7 +332,7 @@
           if (cfg.audioType === 'none') {
               display = 'Say: None';
           } else if (cfg.audioType === 'play') {
-              display = computePlayDisplay(cfg.audioUrl);
+              display = computePlayDisplay(cfg.playText);
           } else {
               display = computeSayDisplay(cfg.prompt);
           }
@@ -367,6 +363,7 @@
               logMessage('DEBUG', 'Repeat input — trimmed flowPath to ' + JSON.stringify(data.flowPath) + ', loop_num: ' + data.loop_num);
           }
 
+          var isRepeat = ($.input === 'repeat');
           var flowPath = Array.isArray(data.flowPath) ? data.flowPath : null;
           var stepNum = data.step_num;
           var loopNum = typeof data.loop_num === 'number' ? data.loop_num : 0;
@@ -396,33 +393,55 @@
 
           var response;
 
-          // Case B: flowPath has values but doesn't contain current node ID
+          // Shared call identity fields carried from router FLOW output
+          var callFields = {
+              sip_call_id: data.sip_call_id || '',
+              jbz_call_id: data.jbz_call_id || '',
+              trunk:       data.trunk || '',
+              direction:   data.direction || '',
+              ani:         data.ani || '',
+              dnis:        data.dnis || ''
+          };
+
+          // Tag enrichment: add audio settings snapshot to tag data
+          var tagExtras = {};
+          if (config.audioType === 'play') {
+              tagExtras.prompt = resolveValue(config.playText || '', data);
+          } else if (config.audioType === 'say') {
+              tagExtras.prompt   = resolveValue(config.prompt || '', data);
+              tagExtras.vendor   = (config.sayVendor   && config.sayVendor.trim())   ? config.sayVendor.trim().toLowerCase()   : 'default';
+              tagExtras.language = (config.sayLanguage && config.sayLanguage.trim()) ? config.sayLanguage.trim() : 'default';
+              tagExtras.voice    = (config.sayVoice    && config.sayVoice.trim())    ? config.sayVoice.trim()    : 'default';
+          }
+
+          // Case B: flowPath has values but doesn’t contain current node ID
           if (hasFlowPath && hasStepNum) {
               var newFlowPath = flowPath.slice();
               newFlowPath.push(nodeId);
-              var newStepNum = (typeof stepNum === 'number' ? stepNum : parseInt(stepNum, 10)) + 1;
 
               var verbsB = [
-                  { verb: 'tag', data: { step_num: newStepNum, loop_num: loopNum, flowPath: newFlowPath } },
+                  { verb: 'tag', data: Object.assign({}, callFields, { step_num: stepNum, loop_num: loopNum, flowPath: newFlowPath }, tagExtras) },
                   gatherVerb
               ];
 
               if (isLastNode) verbsB.push({ verb: 'hangup' });
 
               response = { type: 'ack', msgid: msgid, data: verbsB };
-              logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + newStepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
+              logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + stepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
           } else {
               // Case A: no flowPath or empty flowPath — first handler in chain
+              var initStepNum = (stepNum !== undefined && stepNum !== null) ? stepNum : 1;
+
               var verbsA = [
-                  { verb: 'tag', data: { step_num: 0, loop_num: loopNum, flowPath: [nodeId] } },
-                  { verb: 'answer' },
-                  gatherVerb
+                  { verb: 'tag', data: Object.assign({}, callFields, { step_num: initStepNum, loop_num: loopNum, flowPath: [nodeId] }, tagExtras) }
               ];
+              if (!isRepeat) verbsA.push({ verb: 'answer' });
+              verbsA.push(gatherVerb);
 
               if (isLastNode) verbsA.push({ verb: 'hangup' });
 
               response = { type: 'ack', msgid: msgid, data: verbsA };
-              logMessage('INFO', 'Case A — first in chain (loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
+              logMessage('INFO', 'Case A — first in chain (step_num: ' + initStepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ', isRepeat: ' + isRepeat + ')');
           }
 
           if (ws && ws.readyState === 1) {
@@ -492,7 +511,12 @@
       <div data-bind="?.audioType__show:value === 'play'" class="hidden">
           <div class="row">
               <div class="col-md-12 m">
-                  <ui-component name="input" path="?.audioUrl" config="placeholder:https://example.com/prompt.wav">Audio URL</ui-component>
+                  <ui-component name="input" path="?.playText" config="placeholder:Enter display label for this audio">Play Text</ui-component>
+              </div>
+          </div>
+          <div class="row">
+              <div class="col-md-12 m">
+                  <ui-component name="input" path="?.audioUrl" config="placeholder:https://example.com/prompt.wav">Play URL</ui-component>
               </div>
           </div>
           <div class="row">
