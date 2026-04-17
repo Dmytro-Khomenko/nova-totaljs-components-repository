@@ -7,7 +7,7 @@
   exports.group = 'Jambonz';
   exports.icon = 'ti ti-atom';
   exports.author = 'Demon';
-  exports.version = '3.6.0';
+  exports.version = '3.7.1';
   exports.config = {
       vendor: 'Google',
       language: 'uk-UA',
@@ -415,35 +415,39 @@
               tagExtras.voice    = (config.sayVoice    && config.sayVoice.trim())    ? config.sayVoice.trim()    : 'default';
           }
 
-          // Case B: flowPath has values but doesn’t contain current node ID
-          if (hasFlowPath && hasStepNum) {
-              var newFlowPath = flowPath.slice();
-              newFlowPath.push(nodeId);
+          // Build ack flowPath (append this node to whatever flowPath arrived, including ids added by upstream say-prompt nodes)
+          var ackCurrentFlowPath = Array.isArray(data.flowPath) ? data.flowPath : [];
+          var ackFlowPath = ackCurrentFlowPath.slice();
+          ackFlowPath.push(nodeId);
 
-              var verbsB = [
-                  { verb: 'tag', data: Object.assign({}, callFields, { step_num: stepNum, loop_num: loopNum, flowPath: newFlowPath }, tagExtras) },
-                  gatherVerb
-              ];
+          var ackStepNum = (stepNum !== undefined && stepNum !== null) ? stepNum : 1;
 
-              if (isLastNode) verbsB.push({ verb: 'hangup' });
+          // Include answer only on session:new (handles both direct and upstream-say-prompt scenarios)
+          var needsAnswer = (data.type === 'session:new') && !isRepeat;
 
-              response = { type: 'ack', msgid: msgid, data: verbsB };
-              logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + stepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
-          } else {
-              // Case A: no flowPath or empty flowPath — first handler in chain
-              var initStepNum = (stepNum !== undefined && stepNum !== null) ? stepNum : 1;
+          // Extract verbSayList accumulated by upstream say-prompt nodes (must not appear in tag payload)
+          var verbSayListItems = Array.isArray(data.verbSayList) ? data.verbSayList : [];
 
-              var verbsA = [
-                  { verb: 'tag', data: Object.assign({}, callFields, { step_num: initStepNum, loop_num: loopNum, flowPath: [nodeId] }, tagExtras) }
-              ];
-              if (!isRepeat) verbsA.push({ verb: 'answer' });
-              verbsA.push(gatherVerb);
+          var verbs = [
+              { verb: 'tag', data: Object.assign({}, callFields, { step_num: ackStepNum, loop_num: loopNum, flowPath: ackFlowPath }, tagExtras) }
+          ];
+          if (needsAnswer) verbs.push({ verb: 'answer' });
+          verbSayListItems.forEach(function(v) { verbs.push(v); });
+          verbs.push(gatherVerb);
+          if (isLastNode) verbs.push({ verb: 'hangup' });
 
-              if (isLastNode) verbsA.push({ verb: 'hangup' });
-
-              response = { type: 'ack', msgid: msgid, data: verbsA };
-              logMessage('INFO', 'Case A — first in chain (step_num: ' + initStepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ', isRepeat: ' + isRepeat + ')');
+          // Combine all say texts (standalone say verbs and gather's nested say) into tag prompt
+          var promptParts = [];
+          for (var pi = 1; pi < verbs.length; pi++) {
+              var pv = verbs[pi];
+              if (pv.verb === 'say' && pv.text) promptParts.push(pv.text);
+              else if (pv.verb === 'gather' && pv.say && pv.say.text) promptParts.push(pv.say.text);
           }
+          if (promptParts.length > 0) verbs[0].data.prompt = promptParts.join('. ');
+
+          var caseLabel = (!hasFlowPath || !hasStepNum) ? 'A' : 'B';
+          response = { type: 'ack', msgid: msgid, data: verbs };
+          logMessage('INFO', 'Case ' + caseLabel + ' — ack built (step_num: ' + ackStepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ', needsAnswer: ' + needsAnswer + ', verbSayList count: ' + verbSayListItems.length + ')');
 
           if (ws && ws.readyState === 1) {
               ws.send(JSON.stringify(response));
