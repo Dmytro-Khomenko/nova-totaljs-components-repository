@@ -7,7 +7,7 @@
     exports.group = 'Jambonz';
     exports.icon = 'ti ti-atom';
     exports.author = 'Demon';
-    exports.version = '3.6.0';
+    exports.version = '3.7.1';
     exports.config = {
         audioType: 'say',
         prompt: '',
@@ -261,7 +261,7 @@
                 if (resolvedHook) audioVerb.actionHook = resolvedHook;
                 logMessage('DEBUG', 'Built play verb (url: ' + resolvedUrl + ')');
             } else {
-                // Say mode (default)
+                // Say mode
                 var promptText = resolveValue(config.prompt || '', data);
                 audioVerb = {
                     verb: 'say',
@@ -276,24 +276,29 @@
                 logMessage('DEBUG', 'Built say verb (text: ' + promptText + ')');
             }
 
-            // Resolve ws client and msgid from refs
-            var ws = $.refs.client;
-            var msgid = $.refs.msgid || data.msgid || '';
-
-            // Gather verb triggers the next session:reconnect from Jambonz (Say mode only)
-            var gatherVerb = {
-                verb: 'gather',
-                actionHook: '/dummy',
-                input: ['speech'],
-                timeout: 1,
-                recognizer: { vendor: 'google', vad: { enable: true, mode: 3, voiceMs: 5000 } }
-            };
-
             // If nothing is connected to Output, this is the last node — end with hangup
             var conn = instance.connections && instance.connections.output;
             var isLastNode = !conn || !conn.length;
 
-            var response;
+            // Say mode, NOT last node: append say verb to verbSayList and pass data to output (no ack)
+            if (config.audioType === 'say' && !isLastNode) {
+                var currentFlowPath = Array.isArray(data.flowPath) ? data.flowPath : [];
+                var updatedFlowPath = currentFlowPath.slice();
+                updatedFlowPath.push(nodeId);
+                data.flowPath = updatedFlowPath;
+
+                if (!Array.isArray(data.verbSayList)) data.verbSayList = [];
+                data.verbSayList.push(audioVerb);
+
+                logMessage('INFO', 'Say pass-through — appended to verbSayList, updated flowPath: ' + JSON.stringify(data.flowPath));
+                $.send('output');
+                $.destroy();
+                return;
+            }
+
+            // From here: ack-generating paths (play mode, or say/last node)
+            var ws = $.refs.client;
+            var msgid = $.refs.msgid || data.msgid || '';
 
             // Shared call identity fields carried from router FLOW output
             var callFields = {
@@ -316,41 +321,43 @@
                 tagExtras.voice    = (config.voice    && config.voice.trim())    ? config.voice.trim()    : 'default';
             }
 
-            // Case B: flowPath has values but doesn’t contain current node ID
-            if (hasFlowPath && hasStepNum) {
-                var newFlowPath = flowPath.slice();
-                newFlowPath.push(nodeId);
+            // Build ack flowPath (append this node to whatever flowPath arrived with the data)
+            var ackCurrentFlowPath = Array.isArray(data.flowPath) ? data.flowPath : [];
+            var ackFlowPath = ackCurrentFlowPath.slice();
+            ackFlowPath.push(nodeId);
 
-                var verbsB = [
-                    { verb: 'tag', data: Object.assign({}, callFields, { step_num: stepNum, loop_num: loopNum, flowPath: newFlowPath }, tagExtras) },
-                    audioVerb
-                ];
+            var ackStepNum = (stepNum !== undefined && stepNum !== null) ? stepNum : 1;
 
-                if (isLastNode)
-                    verbsB.push({ verb: 'hangup' });
-                else if (config.audioType === 'say')
-                    verbsB.push(gatherVerb);
+            // Include answer only on session:new (handles both direct and upstream-say-prompt scenarios)
+            var needsAnswer = (data.type === 'session:new') && !isRepeat;
 
-                response = { type: 'ack', msgid: msgid, data: verbsB };
-                logMessage('INFO', 'Case B — appended to flowPath (step_num: ' + stepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ')');
+            var verbs = [
+                { verb: 'tag', data: Object.assign({}, callFields, { step_num: ackStepNum, loop_num: loopNum, flowPath: ackFlowPath }, tagExtras) }
+            ];
+            if (needsAnswer) verbs.push({ verb: 'answer' });
+
+            if (config.audioType === 'play') {
+                // Play mode: send play verb, optionally hangup
+                verbs.push(audioVerb);
+                if (isLastNode) verbs.push({ verb: 'hangup' });
+                logMessage('INFO', 'Play ack — flowPath: ' + JSON.stringify(ackFlowPath) + ', isLastNode: ' + isLastNode + ', needsAnswer: ' + needsAnswer);
             } else {
-                // Case A: no flowPath or empty flowPath — first handler in chain
-                var initStepNum = (stepNum !== undefined && stepNum !== null) ? stepNum : 1;
-
-                var verbsA = [
-                    { verb: 'tag', data: Object.assign({}, callFields, { step_num: initStepNum, loop_num: loopNum, flowPath: [nodeId] }, tagExtras) }
-                ];
-                if (!isRepeat) verbsA.push({ verb: 'answer' });
-                verbsA.push(audioVerb);
-
-                if (isLastNode)
-                    verbsA.push({ verb: 'hangup' });
-                else if (config.audioType === 'say')
-                    verbsA.push(gatherVerb);
-
-                response = { type: 'ack', msgid: msgid, data: verbsA };
-                logMessage('INFO', 'Case A — first in chain (step_num: ' + initStepNum + ', loop_num: ' + loopNum + ', isLastNode: ' + isLastNode + ', isRepeat: ' + isRepeat + ')');
+                // Say mode, last node: prepend any accumulated verbSayList verbs, then own say, then hangup
+                var verbSayListItems = Array.isArray(data.verbSayList) ? data.verbSayList : [];
+                verbSayListItems.forEach(function(v) { verbs.push(v); });
+                verbs.push(audioVerb);
+                verbs.push({ verb: 'hangup' });
+                // Combine all say texts into tag prompt (top to bottom, joined with '. ')
+                var promptParts = [];
+                for (var pi = 1; pi < verbs.length; pi++) {
+                    var pv = verbs[pi];
+                    if (pv.verb === 'say' && pv.text) promptParts.push(pv.text);
+                }
+                if (promptParts.length > 0) verbs[0].data.prompt = promptParts.join('. ');
+                logMessage('INFO', 'Say last ack — flowPath: ' + JSON.stringify(ackFlowPath) + ', verbSayList count: ' + verbSayListItems.length + ', needsAnswer: ' + needsAnswer);
             }
+
+            var response = { type: 'ack', msgid: msgid, data: verbs };
 
             if (ws && ws.readyState === 1) {
                 ws.send(JSON.stringify(response));
