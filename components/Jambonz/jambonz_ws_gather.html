@@ -6,7 +6,7 @@
   exports.group = 'Jambonz';
   exports.icon = 'ti ti-atom';
   exports.author = 'Demon';
-  exports.version = '3.7.1';
+  exports.version = '3.8.0';
   exports.config = {
       vendor: 'Google',
       language: 'uk-UA',
@@ -25,14 +25,13 @@
       audioType: 'none',
       audioUrl: '',
       playText: '',
-      playTimeout: 0,
-      playLoops: 1,
-      playOffset: 0,
+      playAdvanced: { loop: '1', seekOffset: '0', timeoutSecs: '0', earlyMedia: 'false' },
       prompt: '',
       sayVendor: '',
+      sayCustomProvider: '',
       sayLanguage: '',
       sayVoice: '',
-      sayLoop: 1,
+      sayAdvanced: { loop: '1', stream: 'false', earlyMedia: 'false' },
       actionHook: '/transcriber',
       enableHookWaiting: false,
       actionAttempts: 1,
@@ -198,6 +197,40 @@
           return result;
       };
 
+      // Parse a string value to its most appropriate type (boolean, number, or string)
+      var parseTypedValue = function(val) {
+          if (typeof val !== 'string') return val;
+          var trimmed = val.trim();
+          if (trimmed === 'true') return true;
+          if (trimmed === 'false') return false;
+          var num = Number(trimmed);
+          if (trimmed !== '' && !isNaN(num)) return num;
+          return trimmed;
+      };
+
+      // Apply advanced settings key-value pairs to a target object.
+      // When dotNotation=true, keys like "a.b" expand to nested objects and are deep-merged.
+      var applyAdvancedSettings = function(target, settings, dotNotation) {
+          if (!settings || typeof settings !== 'object') return;
+          for (var key in settings) {
+              if (!settings.hasOwnProperty(key)) continue;
+              var val = parseTypedValue(settings[key]);
+              if (dotNotation && key.indexOf('.') !== -1) {
+                  var parts = key.split('.');
+                  var obj = target;
+                  for (var i = 0; i < parts.length - 1; i++) {
+                      if (!obj[parts[i]] || typeof obj[parts[i]] !== 'object') {
+                          obj[parts[i]] = {};
+                      }
+                      obj = obj[parts[i]];
+                  }
+                  obj[parts[parts.length - 1]] = val;
+              } else {
+                  target[key] = val;
+              }
+          }
+      };
+
       var buildGatherVerb = function(data) {
           var gatherVerb = {
               verb: 'gather',
@@ -255,26 +288,36 @@
               }
           }
 
-          // Audio: Play
+          // Audio: Play — url first, then all advanced settings applied flat
           if (config.audioType === 'play' && config.audioUrl && config.audioUrl.trim()) {
               var resolvedUrl = resolveValue(config.audioUrl.trim(), data);
               var playObj = { url: resolvedUrl };
-              if (config.playTimeout > 0) playObj.timeoutSecs = config.playTimeout;
-              if (config.playLoops > 1) playObj.loop = config.playLoops;
-              if (config.playOffset > 0) playObj.seekOffset = config.playOffset;
+              applyAdvancedSettings(playObj, config.playAdvanced, false);
               gatherVerb.play = playObj;
           }
 
-          // Audio: Say
+          // Audio: Say — text first, then advanced settings (with dot notation), then synthesizer from UI fields
           if (config.audioType === 'say' && config.prompt && config.prompt.trim()) {
               var resolvedPrompt = resolveValue(config.prompt.trim(), data);
               var sayObj = { text: resolvedPrompt };
-              if (config.sayLoop > 1) sayObj.loop = config.sayLoop;
+              applyAdvancedSettings(sayObj, config.sayAdvanced, true);
               var synthesizer = {};
-              if (config.sayVendor) synthesizer.vendor = config.sayVendor.toLowerCase();
+              if (config.sayVendor) {
+                  var vendorLower = config.sayVendor.toLowerCase();
+                  synthesizer.vendor = (vendorLower === 'custom' && config.sayCustomProvider && config.sayCustomProvider.trim())
+                      ? 'custom:' + config.sayCustomProvider.trim()
+                      : vendorLower;
+              }
               if (config.sayLanguage) synthesizer.language = config.sayLanguage;
               if (config.sayVoice) synthesizer.voice = config.sayVoice;
-              if (Object.keys(synthesizer).length > 0) sayObj.synthesizer = synthesizer;
+              if (Object.keys(synthesizer).length > 0) {
+                  if (!sayObj.synthesizer || typeof sayObj.synthesizer !== 'object') {
+                      sayObj.synthesizer = synthesizer;
+                  } else {
+                      for (var sk in synthesizer) sayObj.synthesizer[sk] = synthesizer[sk];
+                  }
+              }
+              if (sayObj.synthesizer && Object.keys(sayObj.synthesizer).length === 0) delete sayObj.synthesizer;
               gatherVerb.say = sayObj;
           }
 
@@ -409,7 +452,10 @@
               tagExtras.prompt = resolveValue(config.playText || '', data);
           } else if (config.audioType === 'say') {
               tagExtras.prompt   = resolveValue(config.prompt || '', data);
-              tagExtras.vendor   = (config.sayVendor   && config.sayVendor.trim())   ? config.sayVendor.trim().toLowerCase()   : 'default';
+              var sayVendorRaw   = (config.sayVendor && config.sayVendor.trim()) ? config.sayVendor.trim().toLowerCase() : '';
+              tagExtras.vendor   = sayVendorRaw === 'custom'
+                  ? ('custom:' + (config.sayCustomProvider && config.sayCustomProvider.trim() ? config.sayCustomProvider.trim() : ''))
+                  : (sayVendorRaw || 'default');
               tagExtras.language = (config.sayLanguage && config.sayLanguage.trim()) ? config.sayLanguage.trim() : 'default';
               tagExtras.voice    = (config.sayVoice    && config.sayVoice.trim())    ? config.sayVoice.trim()    : 'default';
           }
@@ -468,6 +514,7 @@
   <script>
       // Dropdown options - MODIFY ONLY THESE ARRAYS TO CHANGE OPTIONS
       var vendors = ['AssemblyAI', 'AWS', 'Cartesia', 'Cobalt', 'Deepgram', 'ElevenLabs', 'Google', 'IBM', 'Microsoft', { id: 'custom:novaASR', name: 'novaASR' }, 'Nuance', 'Nvidia', 'OpenAI', 'PlayHT', 'RimeLabs', 'Soniox', 'Speechmatics', 'Verbio', 'Voxist', 'WellSaid', 'Whisper'];
+      var sayVendors = ['AssemblyAI', 'AWS', 'Cartesia', 'Cobalt', 'Custom', 'Deepgram', 'ElevenLabs', 'Google', 'IBM', 'Microsoft', 'Nuance', 'Nvidia', 'OpenAI', 'PlayHT', 'RimeLabs', 'Soniox', 'Speechmatics', 'Verbio', 'Voxist', 'WellSaid', 'Whisper'];
 
       var languages = ['uk-UA', 'ru-RU', 'en-US'];
       var timezones = [
@@ -523,17 +570,6 @@
                   <ui-component name="input" path="?.audioUrl" config="placeholder:https://example.com/prompt.wav">Play URL</ui-component>
               </div>
           </div>
-          <div class="row">
-              <div class="col-md-4 m">
-                  <ui-component name="input" path="?.playTimeout" config="type:number;min:0;increment:1">Play Timeout (sec)</ui-component>
-              </div>
-              <div class="col-md-4 m">
-                  <ui-component name="input" path="?.playLoops" config="type:number;min:1;increment:1">Play loops</ui-component>
-              </div>
-              <div class="col-md-4 m">
-                  <ui-component name="input" path="?.playOffset" config="type:number;min:0;increment:1">Play offset (sec)</ui-component>
-              </div>
-          </div>
       </div>
 
       <!-- Say mode fields: two-column layout -->
@@ -543,12 +579,50 @@
                   <ui-component name="input" path="?.prompt" config="placeholder:Enter text to speak;type:multiline;rows:8;height:200">Prompt</ui-component>
               </div>
               <div class="col-md-6 m">
-                  <ui-component name="input" path="?.sayVendor" config="placeholder:Select vendor;dirsource:vendors;dirempty:None">Vendor (optional)</ui-component>
+                  <ui-component name="input" path="?.sayVendor" config="placeholder:Select vendor;dirsource:sayVendors;dirempty:None">Vendor (optional)</ui-component>
+                  <div data-bind="?.sayVendor__show:value === 'Custom'" class="hidden">
+                      <ui-component name="input" path="?.sayCustomProvider" config="placeholder:e.g. novaTTS">Custom Provider</ui-component>
+                  </div>
                   <ui-component name="input" path="?.sayLanguage" config="placeholder:Select language;dirsource:languages;dirempty:None">Language (optional)</ui-component>
                   <ui-component name="input" path="?.sayVoice" config="placeholder:e.g. uk-UA-Chirp3-HD-Achernar">Voice (optional)</ui-component>
-                  <ui-component name="input" path="?.sayLoop" config="type:number;min:1;increment:1">Loop</ui-component>
               </div>
           </div>
+      </div>
+
+      <!-- Advanced Audio Settings for Play mode -->
+      <div data-bind="?.audioType__show:value === 'play'" class="hidden">
+          <details class="maintenance-details">
+              <summary class="maintenance-summary"><b>Advanced Audio Settings</b></summary>
+              <div class="maintenance-content">
+                  <div class="row">
+                      <div class="col-md-12 m">
+                          <ui-component name="keyvalue" path="?.playAdvanced" config="placeholderkey:Setting name;placeholdervalue:Setting value and press enter">Settings</ui-component>
+                      </div>
+                  </div>
+                  <div class="help adv-help">
+                      For more details watch: <a href="https://docs.jambonz.org/verbs/verbs/play" target="_blank">https://docs.jambonz.org/verbs/verbs/play</a>
+                  </div>
+              </div>
+          </details>
+      </div>
+
+      <!-- Advanced Audio Settings for Say mode -->
+      <div data-bind="?.audioType__show:value === 'say'" class="hidden">
+          <details class="maintenance-details">
+              <summary class="maintenance-summary"><b>Advanced Audio Settings</b></summary>
+              <div class="maintenance-content">
+                  <div class="row">
+                      <div class="col-md-12 m">
+                          <ui-component name="keyvalue" path="?.sayAdvanced" config="placeholderkey:Setting name (dot notation supported);placeholdervalue:Setting value and press enter">Settings</ui-component>
+                      </div>
+                  </div>
+                  <div class="help adv-help">
+                      For more details watch:<br>
+                      - <a href="https://docs.jambonz.org/verbs/verbs/say" target="_blank">https://docs.jambonz.org/verbs/verbs/say</a><br>
+                      - <a href="https://docs.jambonz.org/verbs/verbs/synthesizer" target="_blank">https://docs.jambonz.org/verbs/verbs/synthesizer</a>
+                  </div>
+              </div>
+          </details>
       </div>
 
       <details class="maintenance-details">
@@ -767,6 +841,16 @@
   color: #6fa8dc !important;
 }
 
+/* Keyvalue component styling */
+#flow_settings .ui-keyvalue input[type="text"] {
+  font-family: Consolas, monospace !important;
+  color: darkblue !important;
+}
+
+.ui-dark #flow_settings .ui-keyvalue input[type="text"] {
+  color: #6fa8dc !important;
+}
+
 /* Number input with max width */
 #flow_settings .col-md-3 input[type="number"],
 #flow_settings .col-md-4 input[type="number"],
@@ -872,6 +956,13 @@
     margin-bottom: 0;
 }
 
+/* Advanced audio settings help tip */
+.adv-help {
+    margin-top: 10px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
 /* TTS partial-fill warning */
 .tts-partial-warning {
     margin: 20px 0px 0px 0px;
@@ -955,6 +1046,21 @@ Since `gather` has its own `actionHook`, no trailing gather verb is appended (un
 
 ### Audio Settings
 - **Audio Type** — Select audio mode: None (default), Play (audio file URL), or Say (text-to-speech)
+
+### Advanced Audio Settings (Play)
+Key-value pairs added to the nested `play` object. Values are auto-typed (boolean, integer, string). Predefined defaults:
+- `loop` — Number of times to loop (default: `1`)
+- `seekOffset` — Start offset in seconds (default: `0`)
+- `timeoutSecs` — Playback timeout in seconds (default: `0`)
+- `earlyMedia` — Play before call is answered (default: `false`)
+
+Note: `actionHook` is intentionally omitted — the nested `play` relies on the parent `gather` verb's own `actionHook`.
+
+### Advanced Audio Settings (Say)
+Key-value pairs added to the nested `say` object. Values are auto-typed (boolean, integer, string). Dot-notation keys (e.g. `synthesizer.vendor`) expand into nested objects. Predefined defaults:
+- `loop` — Number of times to repeat (default: `1`)
+- `stream` — Stream TTS audio (default: `false`)
+- `earlyMedia` — Speak before call is answered (default: `false`)
 
 ### Hook Settings
 - **Action Hook** — URL to send gather results (default: `/transcriber`)
