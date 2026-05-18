@@ -1,0 +1,707 @@
+<script total>
+
+    var COMPONENT_NAME = 'Schema Validate';
+    exports.id = 'schema_validate';
+    exports.name = 'Schema Validate';
+    exports.group = 'Common';
+    exports.icon = 'ti ti-check-circle';
+    exports.author = 'Demon';
+    exports.version = '1.2.2';
+    exports.config = {
+        validatePath: '',
+        passRequest: 'true',
+        rows: [],
+        debug_enabled: false,
+        debug_nameid: true,
+        debug_to_output: false,
+        debug_timestamp: true,
+        debug_errors_to_output: false,
+        debug_timezone: 'UTC',
+        debug_json: false
+    };
+    exports.inputs = [{ id: 'input', name: 'Payload' }];
+    exports.outputs = [{ id: 'passed', name: 'passed' }, { id: 'failed', name: 'failed' }, { id: 'debug', name: 'debug' }];
+
+    exports.make = function(instance, config) {
+
+        var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+        var getTimestamp = function() {
+            try {
+                var now = new Date();
+                var timezone = config.debug_timezone || 'UTC';
+
+                if (timezone.match(/^GMT[+-]\d+$/)) {
+                    var offset = parseInt(timezone.substring(3));
+                    var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    var adjustedTime = new Date(utcTime + (offset * 3600000));
+
+                    var year = adjustedTime.getUTCFullYear();
+                    var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+                    var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+                    var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+                    var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+                    var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+                    var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+
+                    return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+                }
+
+                var formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    fractionalSecondDigits: 3,
+                    hour12: false
+                });
+
+                var parts = formatter.formatToParts(now);
+                var dateParts = {};
+
+                for (var part of parts) {
+                    dateParts[part.type] = part.value;
+                }
+
+                return dateParts.year + '-' + dateParts.month + '-' + dateParts.day + ' ' +
+                    dateParts.hour + ':' + dateParts.minute + ':' + dateParts.second + '.' +
+                    dateParts.fractionalSecond + '000';
+            } catch (e) {
+                var d = new Date();
+                var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+                return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+            }
+        };
+
+        var logMessage = function(level, message, isError) {
+            if (!config.debug_enabled) return;
+
+            var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+            var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+            var output;
+
+            if (config.debug_json) {
+                var entry = {};
+                if (config.debug_timestamp) entry.time = getTimestamp();
+                if (config.debug_nameid) {
+                    entry.component = COMPONENT_NAME;
+                    entry.nodeId = '[' + instance.id + ']';
+                }
+                entry.level = level;
+                entry.message = message;
+                output = JSON.stringify(entry);
+            } else {
+                var parts = [];
+                if (config.debug_timestamp) parts.push(getTimestamp());
+                if (config.debug_nameid) parts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+                parts.push(paddedLevel);
+                parts.push(message);
+                output = parts.join(' ');
+            }
+
+            if (sendToOutput) {
+                try {
+                    var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+                    m.send('debug');
+                } catch (e) {}
+            } else {
+                console.log(output);
+            }
+        };
+
+        var isValidDate = function(value) {
+            // Unix Epoch as number: must be finite and non-negative
+            if (typeof value === 'number') {
+                return Number.isFinite(value) && value >= 0;
+            }
+            if (typeof value !== 'string') return false;
+            var s = value.trim();
+            // Unix Epoch as digit-only string: only 10 digits (seconds) or 13 digits (milliseconds)
+            if (/^\d+$/.test(s)) {
+                return s.length === 10 || s.length === 13;
+            }
+            // ISO 8601 / RFC 3339 format check, then parse validation
+            var isoRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+            if (!isoRegex.test(s)) return false;
+            return !isNaN(new Date(s).getTime());
+        };
+
+        var checkType = function(value, type) {
+            switch (type) {
+                case 'text':    return typeof value === 'string';
+                case 'number':  return typeof value === 'number';
+                case 'boolean': return typeof value === 'boolean';
+                case 'date':    return isValidDate(value);
+                default:        return true;
+            }
+        };
+
+        var buildSchemaDescription = function(rows) {
+            var lines = [];
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                if (row.key) {
+                    lines.push(row.key + ' (' + (row.type || 'text') + ', ' + (row.presence || 'optional') + ')');
+                }
+            }
+            return lines.length ? lines.join('; ') : 'no fields defined';
+        };
+
+        var resolvePath = function(obj, path) {
+            var parts = path.split('.');
+            var current = obj;
+            for (var i = 0; i < parts.length; i++) {
+                if (current === null || current === undefined || typeof current !== 'object') {
+                    return undefined;
+                }
+                current = current[parts[i]];
+            }
+            return current;
+        };
+
+        var updateStatus = function() {
+            var rows = config.rows || [];
+            var defined = rows.filter(function(r) { return r.key; });
+            var pathPrefix = config.validatePath ? '[' + config.validatePath + '] ' : '';
+            if (!defined.length) {
+                instance.status({ display: pathPrefix + 'No schema defined' });
+                return;
+            }
+            var req = defined.filter(function(r) { return r.presence === 'required'; }).length;
+            var opt = defined.length - req;
+            instance.status({ display: pathPrefix + defined.length + ' field(s): ' + req + ' required, ' + opt + ' optional' });
+        };
+
+        instance.message = function($) {
+            var rootData = $.data;
+            var validatePath = (config.validatePath || '').trim();
+
+            if (typeof rootData !== 'object' || rootData === null || Array.isArray(rootData)) {
+                logMessage('ERROR', 'Payload is not a JSON object', true);
+                $.data = {
+                    response: {
+                        error: '400 Bad Request',
+                        text: 'Incorrect request schema fields',
+                        details: 'Payload must be a JSON object',
+                        'expected schema': buildSchemaDescription(config.rows || [])
+                    }
+                };
+                $.send('failed');
+                $.destroy();
+                return;
+            }
+
+            var data;
+
+            if (validatePath) {
+                var resolved = resolvePath(rootData, validatePath);
+                if (resolved === undefined || resolved === null) {
+                    logMessage('ERROR', 'Path "' + validatePath + '" not found in payload', true);
+                    $.data = {
+                        response: {
+                            error: '400 Bad Request',
+                            text: 'Incorrect request schema fields',
+                            details: 'Path "' + validatePath + '" not found in payload',
+                            'expected schema': buildSchemaDescription(config.rows || [])
+                        }
+                    };
+                    $.send('failed');
+                    $.destroy();
+                    return;
+                }
+                if (typeof resolved !== 'object' || Array.isArray(resolved)) {
+                    logMessage('ERROR', 'Value at path "' + validatePath + '" is not a JSON object', true);
+                    $.data = {
+                        response: {
+                            error: '400 Bad Request',
+                            text: 'Incorrect request schema fields',
+                            details: 'Value at path "' + validatePath + '" is not a JSON object',
+                            'expected schema': buildSchemaDescription(config.rows || [])
+                        }
+                    };
+                    $.send('failed');
+                    $.destroy();
+                    return;
+                }
+                data = resolved;
+                logMessage('DEBUG', 'Validating at path "' + validatePath + '"');
+            } else {
+                data = rootData;
+            }
+
+            var rows = config.rows || [];
+            var missingFields = [];
+            var wrongTypeFields = [];
+            var undeclaredFields = [];
+
+            // Build declared key map
+            var declaredKeys = {};
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                if (row.key) {
+                    declaredKeys[row.key] = row;
+                }
+            }
+
+            // Find undeclared fields in payload
+            for (var payloadKey in data) {
+                if (data.hasOwnProperty(payloadKey) && !declaredKeys[payloadKey]) {
+                    undeclaredFields.push(payloadKey);
+                }
+            }
+
+            // Validate each schema field
+            for (var j = 0; j < rows.length; j++) {
+                var r = rows[j];
+                if (!r.key) continue;
+
+                var presence = r.presence || 'optional';
+                var type = r.type || 'text';
+
+                if (presence === 'required') {
+                    if (!(r.key in data)) {
+                        missingFields.push(r.key + ' (' + type + ')');
+                    } else if (!checkType(data[r.key], type)) {
+                        wrongTypeFields.push(r.key + ': expected ' + type + ', got ' + (typeof data[r.key]));
+                    }
+                } else if (presence === 'optional') {
+                    if ((r.key in data) && !checkType(data[r.key], type)) {
+                        wrongTypeFields.push(r.key + ': expected ' + type + ', got ' + (typeof data[r.key]));
+                    }
+                }
+            }
+
+            var hasErrors = missingFields.length > 0 || wrongTypeFields.length > 0 || undeclaredFields.length > 0;
+
+            if (!hasErrors) {
+                logMessage('INFO', 'Schema validation passed');
+                var passedResponse = { status: '200 OK', text: 'Request schema successfully validated' };
+                var passReq = String(config.passRequest) !== 'false';
+                $.data = passReq
+                    ? { request: rootData, response: passedResponse }
+                    : { response: passedResponse };
+                $.send('passed');
+            } else {
+                var detailParts = [];
+                if (missingFields.length > 0) detailParts.push('Missing required fields: ' + missingFields.join(', '));
+                if (wrongTypeFields.length > 0) detailParts.push('Wrong type: ' + wrongTypeFields.join(', '));
+                if (undeclaredFields.length > 0) detailParts.push('Undeclared fields not allowed: ' + undeclaredFields.join(', '));
+
+                var details = detailParts.join('; ');
+                logMessage('WARNING', 'Schema validation failed: ' + details);
+
+                $.data = {
+                    response: {
+                        error: '400 Bad Request',
+                        text: 'Incorrect request schema fields',
+                        details: details,
+                        'expected schema': buildSchemaDescription(rows)
+                    }
+                };
+                $.send('failed');
+            }
+
+            $.destroy();
+        };
+
+        instance.configure = function() {
+            updateStatus();
+        };
+
+        instance.configure();
+
+    };
+
+</script>
+
+<settings>
+
+    <script>
+        var timezones = [
+            'UTC',
+            'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+            'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+            'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+            'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+            'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+            'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+            'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+            'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+            'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+            'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+            'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+            'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+        ];
+    </script>
+
+    <div class="CLASS-settings padding">
+
+        <div style="font-size: 16px; padding: 4px 0 8px;"><b>Main Settings</b></div>
+
+        <div class="row">
+            <div class="col-md-9 m">
+                <ui-component name="input" path="?.validatePath" config="placeholder:e.g. body.data (leave empty to validate root)">Validate Path</ui-component>
+            </div>
+            <div class="col-md-3 m">
+                <ui-component name="input" path="?.passRequest" config="dirsource:true|true,false|false">Pass Request</ui-component>
+            </div>
+        </div>
+
+        <div class="caption m">
+            <div class="toolbar">
+                <nav>
+                    <button class="exec" data-exec="tmpschema.add"><i class="ti ti-plus-circle"></i>Add</button>
+                </nav>
+            </div>
+            <label>Fields</label>
+        </div>
+        <ui-bind path="?.rows" config="template:figure --> data-id;show:value && value.length" class="fields m block">
+            <script type="text/html">
+                {{ foreach m in value }}
+                <figure data-id="{{ m.id }}">
+                    <div class="controls">
+                        <span class="exec" data-exec="tmpschema.rem" title="Remove"><i class="ti ti-trash red"></i></span>
+                    </div>
+                    <div class="cell key">
+                        <span>Key</span><div class="monospace edit hellip" data-edit="exec:tmpschema.editkey;required:1;selectall:1">{{ m.key }}</div>
+                    </div>
+                    <div class="cell type">
+                        <span>Type</span><div class="exec hellip" data-exec="tmpschema.selecttype">{{ m.type | tmpschematype }}</div>
+                    </div>
+                    <div class="cell presence">
+                        <span>Presence</span><div class="exec hellip" data-exec="tmpschema.selectpresence">{{ m.presence | tmpschemapresence }}</div>
+                    </div>
+                </figure>
+                {{ end }}
+            </script>
+        </ui-bind>
+        <div data-bind="?.rows__hide:value && value.length" class="hidden">
+            <div class="center gray padding m">No fields added yet. Click "Add" to define your schema.</div>
+        </div>
+
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+            <div class="maintenance-content">
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 m maintenance-checkbox-group">
+                        <ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+                        <ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="timezone-field-wrapper m">
+                            <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                            <ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+    </div>
+</settings>
+
+<script>
+
+    TOUCH(function(exports, reinit) {
+
+        exports.settings = function(meta) {
+
+            if (!meta.config.rows)
+                meta.config.rows = [];
+
+            var tmp = W.tmpschema;
+
+            if (!tmp) {
+
+                tmp = {};
+
+                tmp.types = [
+                    { id: 'text', name: 'Text' },
+                    { id: 'date', name: 'Date' },
+                    { id: 'number', name: 'Number' },
+                    { id: 'boolean', name: 'Boolean' }
+                ];
+
+                tmp.presences = [
+                    { id: 'required', name: 'Required' },
+                    { id: 'optional', name: 'Optional' }
+                ];
+
+                tmp.add = function(el) {
+                    var scope = el.scope();
+                    var obj = {
+                        id: Math.random().toString(36).substring(4),
+                        key: '',
+                        type: 'text',
+                        presence: 'optional'
+                    };
+                    scope.push('rows', obj);
+                    scope.change('*');
+                };
+
+                tmp.rem = function(el) {
+                    var id = ATTRD(el);
+                    var scope = el.scope();
+                    var model = scope.get();
+                    var index = model.rows.findIndex(function(r) { return r.id === id; });
+                    if (index !== -1) {
+                        model.rows.splice(index, 1);
+                        scope.update('rows');
+                        scope.change('*');
+                    }
+                };
+
+                tmp.editkey = function(opt, next) {
+                    opt.value = (opt.value || '').replace(/(;|\s|,)/g, '').trim();
+                    var scope = opt.element.scope();
+                    var id = ATTRD(opt.element);
+                    var item = scope.get().rows.find(function(r) { return r.id === id; });
+                    if (item)
+                        item.key = opt.value;
+                    scope.change('*');
+                    next(true);
+                };
+
+                tmp.selecttype = function(el) {
+                    var opt = {};
+                    opt.element = el;
+                    opt.align = 'left';
+                    opt.raw = true;
+                    opt.items = tmp.types;
+                    opt.callback = function(selected) {
+                        var scope = el.scope();
+                        var id = ATTRD(el);
+                        var item = scope.get().rows.find(function(r) { return r.id === id; });
+                        if (item)
+                            item.type = selected.id;
+                        el.html(selected.name);
+                        scope.change('*');
+                    };
+                    SETTER('directory/show', opt);
+                };
+
+                tmp.selectpresence = function(el) {
+                    var opt = {};
+                    opt.element = el;
+                    opt.align = 'left';
+                    opt.raw = true;
+                    opt.items = tmp.presences;
+                    opt.callback = function(selected) {
+                        var scope = el.scope();
+                        var id = ATTRD(el);
+                        var item = scope.get().rows.find(function(r) { return r.id === id; });
+                        if (item)
+                            item.presence = selected.id;
+                        el.html(selected.name);
+                        scope.change('*');
+                    };
+                    SETTER('directory/show', opt);
+                };
+
+                Thelpers.tmpschematype = function(val) {
+                    return tmp.types.findValue('id', val, 'name', DEF.empty);
+                };
+
+                Thelpers.tmpschemapresence = function(val) {
+                    return tmp.presences.findValue('id', val, 'name', DEF.empty);
+                };
+
+                W.tmpschema = tmp;
+            }
+        };
+
+    });
+
+</script>
+
+<style>
+    .CLASS { border-color: #25383C !important; }
+    .CLASS header { background-color: #25383C; color: white; }
+    .CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+
+    /* Fix directory dropdown positioning */
+    #flow_settings .ui-directory {
+        position: fixed !important;
+    }
+
+    /* Input field styling */
+    #flow_settings input[type="text"],
+    #flow_settings select {
+        font-family: Consolas, monospace !important;
+        color: darkblue !important;
+    }
+
+    .ui-dark #flow_settings input[type="text"],
+    .ui-dark #flow_settings select {
+        color: #6fa8dc !important;
+    }
+
+    /* Fields table (read.html-style) */
+    .CLASS-settings .fields { border: 1px solid #E0E0E0; border-radius: var(--radius); overflow: hidden; }
+    .CLASS-settings figure { height: 26px; border-top: 1px solid #E0E0E0; line-height: 26px; font-size: 12px; margin: 0; padding: 0; overflow: hidden; }
+    .CLASS-settings figure:first-child { border-top: 0; }
+
+    .CLASS-settings figure .controls { float: right; width: 30px; height: 26px; line-height: 26px; border-left: 1px solid #E0E0E0; text-align: center; }
+    .CLASS-settings figure .controls span { cursor: pointer; }
+
+    .CLASS-settings figure .cell { float: left; height: 26px; line-height: 26px; overflow: hidden; }
+    .CLASS-settings figure .cell > span { float: left; width: 50px; text-align: center; color: #888; font-size: 11px; line-height: 26px; }
+    .CLASS-settings figure .cell > div { outline: 0; margin-left: 50px; padding: 0 8px; line-height: 26px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .CLASS-settings figure .cell.key { width: 44%; }
+    .CLASS-settings figure .cell.key > div { color: #B9261A; font-family: Consolas, monospace; }
+    .CLASS-settings figure .cell.type { width: 24%; }
+    .CLASS-settings figure .cell.type > div { color: #4285F4; }
+    .CLASS-settings figure .cell.presence { width: 22%; }
+    .CLASS-settings figure .cell.presence > div { color: #7B1FA2; }
+
+    .ui-dark .CLASS-settings .fields { border-color: #404040; }
+    .ui-dark .CLASS-settings figure { border-top-color: #404040; }
+    .ui-dark .CLASS-settings figure .controls { border-left-color: #404040; }
+    .ui-dark .CLASS-settings figure .cell span { color: #999; }
+    .ui-dark .CLASS-settings figure .cell.key > div { color: #ff7a6e; }
+    .ui-dark .CLASS-settings figure .cell.type > div { color: #6fa8dc; }
+    .ui-dark .CLASS-settings figure .cell.presence > div { color: #c792ea; }
+
+    /* Maintenance collapsible */
+    .maintenance-details {
+        margin-top: 12px;
+        border: none;
+    }
+    .maintenance-summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 16px;
+        padding: 4px 0 8px;
+        user-select: none;
+    }
+    .maintenance-summary::-webkit-details-marker { display: none; }
+    .maintenance-summary::before {
+        content: '\25B6';
+        display: inline-block;
+        margin-right: 10px;
+        transition: transform 0.15s ease;
+    }
+    .maintenance-details[open] .maintenance-summary::before {
+        transform: rotate(90deg);
+    }
+    .maintenance-content {
+        padding-top: 8px;
+        padding-bottom: 4px;
+    }
+    .maintenance-checkbox-group .ui-input {
+        display: block;
+        margin-bottom: 20px;
+    }
+    .maintenance-checkbox-group .ui-input:last-child { margin-bottom: 0; }
+
+    /* Timezone field */
+    .timezone-field-wrapper { width: 65%; }
+    .timezone-field-wrapper .ui-input-label {
+        font-size: inherit !important;
+        color: inherit !important;
+    }
+</style>
+
+<body>
+    <header>
+        <i class="$ICON"></i>$NAME
+    </header>
+</body>
+
+<readme>
+# Schema Validate
+
+Validates an incoming JSON payload against a configurable field schema.
+
+## Inputs / Outputs
+
+- **Payload** — Incoming JSON object to validate
+- **passed** — Emitted when payload matches the schema
+- **failed** — Emitted when payload does not match the schema
+- **debug** — Formatted debug/error messages (when debug output options are enabled)
+
+## Validation Rules
+
+1. All **required** fields must be present in the payload with the correct type.
+2. Any field in the payload that is **not declared** (neither required nor optional) causes validation failure.
+3. **Optional** fields do not need to be present, but if present, must match the declared type.
+
+### Passed output
+```json
+{
+  "request": { "<original input data as-is>" },
+  "response": {
+    "status": "200 OK",
+    "text": "Request schema successfully validated"
+  }
+}
+```
+
+### Failed output
+```json
+{
+  "response": {
+    "error": "400 Bad Request",
+    "text": "Incorrect request schema fields",
+    "details": "<which fields missed in request AND/OR which fields have wrong type>",
+    "expected schema": "<full expected schema description>"
+  }
+}
+```
+
+## Configuration
+
+### Main Settings
+
+Click **Add field** to define schema fields. Each row has:
+
+- **Key** — Field name as it appears in the payload
+- **Type** — Expected data type:
+  - `Text` — JavaScript string
+  - `Date` — ISO 8601, RFC 3339, or Unix Epoch (number or digit-only string)
+  - `Number` — JavaScript number
+  - `Boolean` — JavaScript boolean
+- **Presence**:
+  - `Required` — Field must be present and correctly typed
+  - `Optional` — Field may be absent; if present, must be correctly typed
+
+### Debug Configuration
+
+- **Enable component debug** — Activates debug logging
+- **Send Name and ID** — Includes component name and node ID in log entries
+- **Send debug to Debug output** — Routes debug messages to the `debug` output pin instead of console
+- **Send errors to Debug output** — Routes error messages to the `debug` output pin
+- **Timestamp (ISO 8601)** — Prepends a timestamp to each log entry
+- **JSON output** — Emits log entries as JSON objects instead of plain text
+- **Timezone** — Timezone for timestamps (default: UTC)
+
+## Date Validation
+
+The `date` type accepts:
+- **ISO 8601 / RFC 3339 strings**: `2024-01-15`, `2024-01-15T10:30:00Z`, `2024-01-15T10:30:00+02:00`
+- **Unix Epoch as number**: `1705315800`
+- **Unix Epoch as digit-only string**: `"1705315800"`
+</readme>

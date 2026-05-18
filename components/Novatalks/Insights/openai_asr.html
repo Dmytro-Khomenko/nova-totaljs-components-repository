@@ -1,0 +1,516 @@
+<script total>
+
+    var COMPONENT_NAME = 'OpenAI [ASR]';
+    exports.id = 'novatalks_openai_asr';
+    exports.name = 'OpenAI [ASR]';
+    exports.group = 'Novatalks Insights';
+    exports.icon = 'ti ti-openai';
+    exports.color = '#0EA982';
+    exports.author = 'Demon';
+    exports.version = '1.0.0';
+    exports.npm = ['openai', 'async-sema'];
+    exports.config = {
+        apiKey: '',
+        model: 'whisper-1',
+        language: 'uk',
+        audioPath: 'processed.audio',
+        parallelFlows: 10,
+        participantTypeMono: 'undefined',
+        participantTypeLeft: 'Customer',
+        participantTypeRight: 'Agent',
+        debug_enabled: false,
+        debug_nameid: true,
+        debug_to_output: false,
+        debug_timestamp: true,
+        debug_errors_to_output: false,
+        debug_timezone: 'UTC',
+        debug_json: false
+    };
+    exports.inputs = [{ id: 'input', name: 'Input' }];
+    exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
+
+    exports.make = function(instance, config) {
+
+        var OpenAI = require('openai');
+        var Sema = require('async-sema').Sema;
+        var fs = require('fs');
+
+        var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+        var getTimestamp = function() {
+            try {
+                var now = new Date();
+                var timezone = config.debug_timezone || 'UTC';
+
+                if (timezone.match(/^GMT[+-]\d+$/)) {
+                    var offset = parseInt(timezone.substring(3));
+                    var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    var adjustedTime = new Date(utcTime + (offset * 3600000));
+                    var year = adjustedTime.getUTCFullYear();
+                    var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+                    var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+                    var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+                    var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+                    var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+                    var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+                    return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+                }
+
+                var formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone,
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    fractionalSecondDigits: 3, hour12: false
+                });
+                var parts = formatter.formatToParts(now);
+                var dp = {};
+                for (var part of parts) dp[part.type] = part.value;
+                return dp.year + '-' + dp.month + '-' + dp.day + ' ' + dp.hour + ':' + dp.minute + ':' + dp.second + '.' + dp.fractionalSecond + '000';
+            } catch (e) {
+                var d = new Date();
+                var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+                return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+            }
+        };
+
+        var logMessage = function(level, message, isError) {
+            if (!config.debug_enabled) return;
+
+            var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+            var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+            var output;
+
+            if (config.debug_json) {
+                var entry = {};
+                if (config.debug_timestamp) entry.time = getTimestamp();
+                if (config.debug_nameid) { entry.component = COMPONENT_NAME; entry.nodeId = '[' + instance.id + ']'; }
+                entry.level = level;
+                entry.message = message;
+                output = JSON.stringify(entry);
+            } else {
+                var lineParts = [];
+                if (config.debug_timestamp) lineParts.push(getTimestamp());
+                if (config.debug_nameid) lineParts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+                lineParts.push(paddedLevel);
+                lineParts.push(message);
+                output = lineParts.join(' ');
+            }
+
+            if (sendToOutput) {
+                try {
+                    var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+                    m.send('debug');
+                } catch (e) {}
+            } else {
+                console.log(output);
+            }
+        };
+
+        // Resolve dot-notation path against data object.
+        // Returns string path as single-element array, array as-is, null if unresolvable.
+        var resolveAudioPaths = function(data, audioPathConfig) {
+            var pathStr = (audioPathConfig || '').trim();
+            if (!pathStr) return null;
+
+            var parts = pathStr.split('.');
+            var value = data;
+            for (var i = 0; i < parts.length; i++) {
+                if (value === null || value === undefined || typeof value !== 'object') {
+                    value = undefined;
+                    break;
+                }
+                value = value[parts[i]];
+            }
+
+            if (Array.isArray(value)) return value.filter(function(v) { return typeof v === 'string' && v.trim(); });
+            if (typeof value === 'string' && value.trim()) return [value.trim()];
+            return null;
+        };
+
+        var getParticipantType = function(audioIndex, totalFiles) {
+            if (totalFiles === 1) return config.participantTypeMono || 'undefined';
+            return audioIndex === 0
+                ? (config.participantTypeLeft || 'Customer')
+                : (config.participantTypeRight || 'Agent');
+        };
+
+        var transcribeAudio = async function(audioPath, participantType, apiKey) {
+            var startTime = Date.now();
+            var client = new OpenAI({ apiKey: apiKey });
+
+            logMessage('DEBUG', 'Transcribing: ' + audioPath + ' as participant: ' + participantType);
+
+            var response = await client.audio.transcriptions.create({
+                file: fs.createReadStream(audioPath),
+                model: config.model || 'whisper-1',
+                language: config.language || 'uk',
+                response_format: 'verbose_json'
+            });
+
+            var transcribingTime = Date.now() - startTime;
+
+            var segments = (response.segments || []).map(function(seg) {
+                return {
+                    start: Math.round(seg.start * 100) / 100,
+                    end: Math.round(seg.end * 100) / 100,
+                    participant: participantType,
+                    transcribingTime: transcribingTime,
+                    text: (seg.text || '').trim()
+                };
+            });
+
+            logMessage('DEBUG', 'Transcription done for ' + audioPath + ': ' + segments.length + ' segment(s) in ' + transcribingTime + 'ms');
+            return segments;
+        };
+
+        var processDialog = async function(row, apiKey) {
+            var dialogId = row.DialogID || 'unknown';
+            var audioPath = config.audioPath || 'processed.audio';
+
+            var audioPaths = resolveAudioPaths(row, audioPath);
+
+            if (!audioPaths || audioPaths.length === 0) {
+                throw new Error('No audio paths resolved from "' + audioPath + '" for DialogID: ' + dialogId);
+            }
+
+            logMessage('INFO', 'Transcribing ' + audioPaths.length + ' audio file(s) for DialogID: ' + dialogId);
+
+            // Transcribe all channels in parallel
+            var channelResults = await Promise.all(
+                audioPaths.map(function(filePath, idx) {
+                    var participant = getParticipantType(idx, audioPaths.length);
+                    return transcribeAudio(filePath, participant, apiKey);
+                })
+            );
+
+            // Merge all segments from all channels and sort by start time
+            var allSegments = [];
+            for (var i = 0; i < channelResults.length; i++) {
+                for (var j = 0; j < channelResults[i].length; j++) {
+                    allSegments.push(channelResults[i][j]);
+                }
+            }
+            allSegments.sort(function(a, b) { return a.start - b.start; });
+
+            var fullText = allSegments.map(function(s) { return s.text; }).join(' ').trim();
+
+            return Object.assign({}, row, {
+                transcription: {
+                    full: fullText,
+                    segments: allSegments
+                }
+            });
+        };
+
+        instance.message = async function($) {
+            var input = $.data;
+            var apiKey = instance.replace(config.apiKey || '');
+
+            if (!apiKey || !apiKey.trim()) {
+                logMessage('ERROR', 'API key is not configured', true);
+                $.destroy();
+                return;
+            }
+
+            // Normalize input: accept both single object and array
+            var dialogs = Array.isArray(input) ? input : [input];
+
+            if (dialogs.length === 0) {
+                logMessage('WARNING', 'Input is empty — nothing to transcribe');
+                $.destroy();
+                return;
+            }
+
+            var parallelLimit = config.parallelFlows || 10;
+            logMessage('INFO', 'Starting transcription of ' + dialogs.length + ' dialog(s) with parallelLimit=' + parallelLimit);
+
+            var sem = new Sema(parallelLimit);
+            var processed = 0;
+            var failed = 0;
+
+            await Promise.all(dialogs.map(async function(row) {
+                await sem.acquire();
+                try {
+                    var result = await processDialog(row, apiKey);
+                    processed++;
+                    logMessage('DEBUG', 'Emitting output for DialogID: ' + (row.DialogID || 'unknown') + ' (' + processed + '/' + dialogs.length + ')');
+                    instance.newmessage(result).send('output');
+                } catch (err) {
+                    failed++;
+                    logMessage('ERROR', 'Failed DialogID: ' + (row.DialogID || 'unknown') + ' — ' + (err.message || String(err)), true);
+                } finally {
+                    sem.release();
+                }
+            }));
+
+            logMessage('INFO', 'Batch complete. Processed: ' + processed + ', Failed: ' + failed + ', Total: ' + dialogs.length);
+            $.destroy();
+        };
+
+        instance.configure = function() {
+            instance.status({ display: (config.model || 'whisper-1') + ' | ' + (config.language || 'uk') + ' | parallel: ' + (config.parallelFlows || 10) });
+        };
+
+        instance.configure();
+    };
+
+</script>
+
+<settings>
+
+    <script>
+        var models = [
+            'whisper-1',
+            'gpt-4o-transcribe',
+            'gpt-4o-mini-transcribe'
+        ];
+
+        var languages = [
+            { id: 'uk', name: 'Ukrainian (uk)' },
+            { id: 'ru', name: 'Russian (ru)' },
+            { id: 'en', name: 'English (en)' }
+        ];
+
+        var timezones = [
+            'UTC',
+            'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+            'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+            'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+            'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+            'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+            'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+            'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+            'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+            'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+            'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+            'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+            'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+        ];
+    </script>
+
+    <div class="padding">
+
+        <div style="font-size: 16px; padding: 4px 0 8px;"><b>Main Settings</b></div>
+
+        <div class="row">
+            <div class="col-md-8 m">
+                <ui-component name="input" path="?.apiKey" config="placeholder:API key or {{ $FLOW_VARS.openai_api_key }};required:1">API Key</ui-component>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-4 m">
+                <ui-component name="input" path="?.model" config="dirsource:models;required:1">Model</ui-component>
+            </div>
+            <div class="col-md-4 m">
+                <ui-component name="input" path="?.language" config="dirsource:languages;required:1">Language</ui-component>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-4 m">
+                <ui-component name="input" path="?.parallelFlows" config="type:number;min:1;max:50;increment:1">Parallel Processes</ui-component>
+            </div>
+            <div class="col-md-4 m">
+                <ui-component name="input" path="?.audioPath" config="placeholder:processed.audio;required:1">Audio Path</ui-component>
+            </div>
+        </div>
+
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Participants Settings</b></summary>
+            <div class="maintenance-content">
+                <div class="row">
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.participantTypeMono" config="placeholder:undefined;required:1">Mono channel</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.participantTypeLeft" config="placeholder:Customer;required:1">Left channel</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.participantTypeRight" config="placeholder:Agent;required:1">Right channel</ui-component>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+            <div class="maintenance-content">
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 m maintenance-checkbox-group">
+                        <ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+                        <ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="timezone-field-wrapper m">
+                            <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                            <ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+    </div>
+
+</settings>
+
+<style>
+.CLASS { border-color: #0EA982 !important; }
+.CLASS header { background-color: #0EA982; color: white; }
+.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+#flow_settings .ui-directory {
+    position: fixed !important;
+}
+
+#flow_settings input[type="text"],
+#flow_settings select {
+    font-family: Consolas, monospace !important;
+    color: darkblue !important;
+}
+
+.ui-dark #flow_settings input[type="text"],
+.ui-dark #flow_settings select {
+    color: #6fa8dc !important;
+}
+
+#flow_settings input[type="number"] {
+    font-family: Consolas, monospace !important;
+    color: darkblue !important;
+}
+
+.ui-dark #flow_settings input[type="number"] {
+    color: #6fa8dc !important;
+}
+
+#flow_settings .col-md-3 input[type="number"],
+#flow_settings .col-md-4 input[type="number"],
+#flow_settings .col-md-6 input[type="number"] {
+    max-width: 70px !important;
+}
+
+.maintenance-details {
+    margin-top: 12px;
+    border: none;
+}
+.maintenance-summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 16px;
+    padding: 4px 0 8px;
+    user-select: none;
+}
+.maintenance-summary::-webkit-details-marker { display: none; }
+.maintenance-summary::before {
+    content: '\25B6';
+    display: inline-block;
+    margin-right: 10px;
+    transition: transform 0.15s ease;
+}
+.maintenance-details[open] .maintenance-summary::before {
+    transform: rotate(90deg);
+}
+.maintenance-content {
+    padding-top: 8px;
+    padding-bottom: 4px;
+}
+.maintenance-checkbox-group .ui-input {
+    display: block;
+    margin-bottom: 20px;
+}
+.maintenance-checkbox-group .ui-input:last-child {
+    margin-bottom: 0;
+}
+
+.timezone-field-wrapper {
+    width: 65%;
+}
+.timezone-field-wrapper .ui-input-label {
+    font-size: inherit !important;
+    color: inherit !important;
+}
+</style>
+
+<body>
+<header>
+    <i class="$ICON"></i>$NAME
+</header>
+</body>
+
+<readme>
+### OpenAI [ASR]
+Novatalks Insights component for audio transcription via OpenAI Whisper API.
+
+Receives a dialog object (or array of dialogs), resolves audio file path(s) from configurable `Audio Path`, transcribes each file via Whisper, merges and sorts segments chronologically, and emits one output message per dialog.
+
+## Inputs / Outputs
+
+- **Input** — Single dialog object or array of dialogs
+- **Output** — One message per transcribed dialog (passthrough fields + `transcription` object)
+- **debug** — Formatted debug/error messages
+
+## Audio Path Resolution
+
+The `Audio Path` field is a dot-notation path resolved against the input data:
+
+- `processed.audio` → resolves `data.processed.audio` — expects array of file paths (APM output)
+- `someAudioPath` → resolves `data.someAudioPath` — expects a string file path
+- Any resolved string is automatically wrapped into a single-element array
+
+## Participant Type Assignment
+
+Assigned by array index position of resolved audio files:
+
+| Files count | Index 0 | Index 1 |
+|---|---|---|
+| 1 file | Mono channel type | — |
+| 2 files | Left channel type | Right channel type |
+
+## Output payload
+
+```json
+{
+  "documentID": "...",
+  "transcription": {
+    "full": "Hello I need help. Of course.",
+    "segments": [
+      { "start": 0.0, "end": 3.2, "participant": "Customer", "transcribingTime": 520, "text": "Hello I need help." },
+      { "start": 4.1, "end": 7.5, "participant": "Agent",    "transcribingTime": 480, "text": "Of course." }
+    ]
+  }
+}
+```
+
+Segments from all channels are merged and sorted by `start` time.
+
+## Configuration
+
+- **API Key** — OpenAI API key (supports `{{ $FLOW_VARS.openai_api_key }}` flow variable)
+- **Model** — Whisper model to use
+- **Language** — Whisper language code
+- **Audio Path** — Dot-notation path to audio file(s) in input data
+- **Parallel Processes** — Max concurrent dialog transcription jobs (semaphore limit)
+
+## Requirements
+
+- npm: `openai`, `async-sema` (auto-installed via `exports.npm`)
+</readme>

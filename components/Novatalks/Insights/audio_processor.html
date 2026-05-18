@@ -1,0 +1,496 @@
+<script total>
+
+    var COMPONENT_NAME = 'Audio Processor';
+    exports.id = 'novatalks_audio_processor';
+    exports.name = 'Audio Processor';
+    exports.group = 'Novatalks Insights';
+    exports.icon = 'ti ti-history';
+    exports.color = '#25383C';
+    exports.author = 'Demon';
+    exports.version = '1.1.0';
+    exports.npm = ['fluent-ffmpeg', 'async-sema'];
+    exports.config = {
+        parallelFlows: 10,
+        outputSampleRate: 16000,
+        normalize: 'true',
+        tempDirectory: '/tmp/audioProcessor',
+        debug_enabled: false,
+        debug_nameid: true,
+        debug_to_output: false,
+        debug_timestamp: true,
+        debug_errors_to_output: false,
+        debug_timezone: 'UTC',
+        debug_json: false
+    };
+    exports.inputs = [{ id: 'input', name: 'Input' }];
+    exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
+
+    exports.make = function(instance, config) {
+
+        var ffmpeg = require('fluent-ffmpeg');
+        var Sema = require('async-sema').Sema;
+        var fs = require('fs');
+        var path = require('path');
+        var crypto = require('crypto');
+
+        var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+        var getTimestamp = function() {
+            try {
+                var now = new Date();
+                var timezone = config.debug_timezone || 'UTC';
+
+                if (timezone.match(/^GMT[+-]\d+$/)) {
+                    var offset = parseInt(timezone.substring(3));
+                    var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    var adjustedTime = new Date(utcTime + (offset * 3600000));
+                    var year = adjustedTime.getUTCFullYear();
+                    var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+                    var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+                    var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+                    var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+                    var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+                    var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+                    return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+                }
+
+                var formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone,
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    fractionalSecondDigits: 3, hour12: false
+                });
+                var parts = formatter.formatToParts(now);
+                var dp = {};
+                for (var part of parts) dp[part.type] = part.value;
+                return dp.year + '-' + dp.month + '-' + dp.day + ' ' + dp.hour + ':' + dp.minute + ':' + dp.second + '.' + dp.fractionalSecond + '000';
+            } catch (e) {
+                var d = new Date();
+                var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+                return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+            }
+        };
+
+        var logMessage = function(level, message, isError) {
+            if (!config.debug_enabled) return;
+
+            var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+            var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+            var output;
+
+            if (config.debug_json) {
+                var entry = {};
+                if (config.debug_timestamp) entry.time = getTimestamp();
+                if (config.debug_nameid) { entry.component = COMPONENT_NAME; entry.nodeId = '[' + instance.id + ']'; }
+                entry.level = level;
+                entry.message = message;
+                output = JSON.stringify(entry);
+            } else {
+                var lineParts = [];
+                if (config.debug_timestamp) lineParts.push(getTimestamp());
+                if (config.debug_nameid) lineParts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+                lineParts.push(paddedLevel);
+                lineParts.push(message);
+                output = lineParts.join(' ');
+            }
+
+            if (sendToOutput) {
+                try {
+                    var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+                    m.send('debug');
+                } catch (e) {}
+            } else {
+                console.log(output);
+            }
+        };
+
+        var ensureDir = function(dirPath) {
+            if (!fs.existsSync(dirPath))
+                fs.mkdirSync(dirPath, { recursive: true });
+        };
+
+        var getAudioInfo = function(filePath) {
+            return new Promise(function(resolve, reject) {
+                ffmpeg.ffprobe(filePath, function(err, metadata) {
+                    if (err) return reject(err);
+                    var audioStream = metadata.streams.find(function(s) { return s.codec_type === 'audio'; });
+                    if (!audioStream) return reject(new Error('No audio stream found in: ' + filePath));
+                    var stat = fs.statSync(filePath);
+                    resolve({
+                        channels: audioStream.channels || 1,
+                        sampleRate: parseInt(audioStream.sample_rate) || 0,
+                        duration: parseFloat(metadata.format.duration) || 0,
+                        size: stat.size
+                    });
+                });
+            });
+        };
+
+        var buildFilters = function(sourceSampleRate, targetSampleRate, normalize) {
+            var filters = [];
+            if (sourceSampleRate === 8000) {
+                filters.push('highpass=f=300');
+                filters.push('lowpass=f=3400');
+            } else {
+                filters.push('highpass=f=80');
+                filters.push('lowpass=f=8000');
+            }
+            if (normalize === true || normalize === 'true') filters.push('loudnorm');
+            return filters;
+        };
+
+        var processMonoChannel = function(inputPath, outputPath, sourceSampleRate, targetSampleRate, normalize) {
+            return new Promise(function(resolve, reject) {
+                var filters = buildFilters(sourceSampleRate, targetSampleRate, normalize);
+                ffmpeg(inputPath)
+                    .audioChannels(1)
+                    .audioFrequency(targetSampleRate)
+                    .audioFilters(filters)
+                    .output(outputPath)
+                    .format('wav')
+                    .on('end', function() { resolve(outputPath); })
+                    .on('error', function(err) { reject(err); })
+                    .run();
+            });
+        };
+
+        var processStereoChannel = function(inputPath, outputPath, channelIndex, sourceSampleRate, targetSampleRate, normalize) {
+            return new Promise(function(resolve, reject) {
+                var filters = buildFilters(sourceSampleRate, targetSampleRate, normalize);
+                // pan filter extracts a single channel: FL = left (0), FR = right (1)
+                var panFilter = channelIndex === 0 ? 'pan=mono|c0=FL' : 'pan=mono|c0=FR';
+                ffmpeg(inputPath)
+                    .audioFrequency(targetSampleRate)
+                    .audioFilters([panFilter].concat(filters))
+                    .output(outputPath)
+                    .format('wav')
+                    .on('end', function() { resolve(outputPath); })
+                    .on('error', function(err) { reject(err); })
+                    .run();
+            });
+        };
+
+        var processDialog = async function(row) {
+            var startTime = Date.now();
+            var dialogId = row.DialogID || 'unknown';
+            var recordingFile = row.RecordingFile;
+
+            logMessage('DEBUG', 'Processing dialog: ' + dialogId + ' | file: ' + recordingFile);
+
+            var audioInfo = await getAudioInfo(recordingFile);
+            logMessage('DEBUG', 'Audio info for ' + dialogId + ': channels=' + audioInfo.channels + ', sampleRate=' + audioInfo.sampleRate + ', duration=' + audioInfo.duration.toFixed(2) + 's');
+
+            var sessionId = crypto.randomBytes(6).toString('hex');
+            var sessionDir = path.join(config.tempDirectory, sessionId);
+            ensureDir(sessionDir);
+
+            var baseName = path.basename(recordingFile, path.extname(recordingFile));
+            var targetSampleRate = config.outputSampleRate || 16000;
+            var normalize = config.normalize !== false;
+            var processedAudio = [];
+
+            if (audioInfo.channels === 2) {
+                var leftPath  = path.join(sessionDir, baseName + '_left.wav');
+                var rightPath = path.join(sessionDir, baseName + '_right.wav');
+
+                logMessage('DEBUG', 'Stereo: processing left and right channels in parallel for ' + dialogId);
+
+                var results = await Promise.all([
+                    processStereoChannel(recordingFile, leftPath,  0, audioInfo.sampleRate, targetSampleRate, normalize),
+                    processStereoChannel(recordingFile, rightPath, 1, audioInfo.sampleRate, targetSampleRate, normalize)
+                ]);
+
+                processedAudio = results;
+                logMessage('INFO', 'Stereo processing done for ' + dialogId + ': ' + results.join(', '));
+            } else {
+                var monoPath = path.join(sessionDir, baseName + '_mono.wav');
+                logMessage('DEBUG', 'Mono: processing channel for ' + dialogId);
+                var monoResult = await processMonoChannel(recordingFile, monoPath, audioInfo.sampleRate, targetSampleRate, normalize);
+                processedAudio = [monoResult];
+                logMessage('INFO', 'Mono processing done for ' + dialogId + ': ' + monoResult);
+            }
+
+            var processTime = Date.now() - startTime;
+
+            return Object.assign({}, row, {
+                processed: {
+                    data: {
+                        channels: audioInfo.channels,
+                        size: audioInfo.size,
+                        duration: Math.round(audioInfo.duration * 10) / 10,
+                        processTime: processTime
+                    },
+                    audio: processedAudio
+                }
+            });
+        };
+
+        instance.message = async function($) {
+            var dialogs = $.data;
+
+            if (!Array.isArray(dialogs) || dialogs.length === 0) {
+                logMessage('WARNING', 'Input is empty or not an array — nothing to process');
+                $.destroy();
+                return;
+            }
+
+            var parallelLimit = config.parallelFlows || 10;
+            logMessage('INFO', 'Starting processing of ' + dialogs.length + ' dialog(s) with parallelLimit=' + parallelLimit);
+
+            var sem = new Sema(parallelLimit);
+            var processed = 0;
+            var failed = 0;
+
+            await Promise.all(dialogs.map(async function(row) {
+                await sem.acquire();
+                try {
+                    var result = await processDialog(row);
+                    processed++;
+                    logMessage('DEBUG', 'Emitting output for DialogID: ' + (row.DialogID || 'unknown') + ' (' + processed + '/' + dialogs.length + ')');
+                    instance.newmessage(result).send('output');
+                } catch (err) {
+                    failed++;
+                    logMessage('ERROR', 'Failed to process DialogID: ' + (row.DialogID || 'unknown') + ' — ' + (err.message || String(err)), true);
+                } finally {
+                    sem.release();
+                }
+            }));
+
+            logMessage('INFO', 'Batch complete. Processed: ' + processed + ', Failed: ' + failed + ', Total: ' + dialogs.length);
+            $.destroy();
+        };
+
+        instance.configure = function() {
+            instance.status({ display: 'Parallel: ' + (config.parallelFlows || 10) + ' | ' + (config.outputSampleRate || 16000) + ' Hz' });
+        };
+
+        instance.configure();
+    };
+
+</script>
+
+<settings>
+
+    <script>
+        var timezones = [
+            'UTC',
+            'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+            'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+            'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+            'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+            'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+            'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+            'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+            'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+            'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+            'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+            'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+            'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+        ];
+    </script>
+
+    <div class="padding">
+
+        <div style="font-size: 16px; padding: 4px 0 8px;"><b>Main Settings</b></div>
+
+        <div class="row">
+            <div class="col-md-3 m">
+                <ui-component name="input" path="?.parallelFlows" config="type:number;min:1;max:50;increment:1">Parallel Processes</ui-component>
+            </div>
+            <div class="col-md-3 m">
+                <ui-component name="input" path="?.outputSampleRate" config="type:number;min:8000;max:48000;increment:1000">Output Sample Rate</ui-component>
+            </div>
+            <div class="col-md-3 m">
+                <ui-component name="input" path="?.normalize" config="dirsource:true|true,false|false">Normalize</ui-component>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6 m">
+                <ui-component name="input" path="?.tempDirectory" config="placeholder:/tmp/audioProcessor">Temporary Directory</ui-component>
+            </div>
+        </div>
+
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+            <div class="maintenance-content">
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6 m maintenance-checkbox-group">
+                        <ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+                        <ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="timezone-field-wrapper m">
+                            <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                            <ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+    </div>
+
+</settings>
+
+<style>
+.CLASS { border-color: #25383C !important; }
+.CLASS header { background-color: #25383C; color: white; }
+.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+#flow_settings .ui-directory {
+    position: fixed !important;
+}
+
+#flow_settings input[type="text"],
+#flow_settings select {
+    font-family: Consolas, monospace !important;
+    color: darkblue !important;
+}
+
+.ui-dark #flow_settings input[type="text"],
+.ui-dark #flow_settings select {
+    color: #6fa8dc !important;
+}
+
+#flow_settings input[type="number"] {
+    font-family: Consolas, monospace !important;
+    color: darkblue !important;
+}
+
+.ui-dark #flow_settings input[type="number"] {
+    color: #6fa8dc !important;
+}
+
+#flow_settings .col-md-3 input[type="number"],
+#flow_settings .col-md-4 input[type="number"],
+#flow_settings .col-md-6 input[type="number"] {
+    max-width: 70px !important;
+}
+
+.maintenance-details {
+    margin-top: 12px;
+    border: none;
+}
+.maintenance-summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: 16px;
+    padding: 4px 0 8px;
+    user-select: none;
+}
+.maintenance-summary::-webkit-details-marker { display: none; }
+.maintenance-summary::before {
+    content: '\25B6';
+    display: inline-block;
+    margin-right: 10px;
+    transition: transform 0.15s ease;
+}
+.maintenance-details[open] .maintenance-summary::before {
+    transform: rotate(90deg);
+}
+.maintenance-content {
+    padding-top: 8px;
+    padding-bottom: 4px;
+}
+.maintenance-checkbox-group .ui-input {
+    display: block;
+    margin-bottom: 20px;
+}
+.maintenance-checkbox-group .ui-input:last-child {
+    margin-bottom: 0;
+}
+
+.timezone-field-wrapper {
+    width: 65%;
+}
+.timezone-field-wrapper .ui-input-label {
+    font-size: inherit !important;
+    color: inherit !important;
+}
+
+</style>
+
+<body>
+<header>
+    <i class="$ICON"></i>$NAME
+</header>
+</body>
+
+<readme>
+### Audio Processor
+Novatalks Insights component for audio preprocessing before transcription.
+
+Receives an **array** of dialog records from OpenSearch, preprocesses each audio file using `ffmpeg`, and emits one output message **per dialog** as soon as it completes — continuous semaphore-based parallelism, no batch waiting.
+
+## Inputs / Outputs
+
+- **Input** — Array of dialog objects (from OpenSearch fetch)
+- **Output** — One message per processed dialog (passthrough fields + `processed` object)
+- **debug** — Formatted debug/error messages
+
+## Processing
+
+For each dialog:
+1. Probes audio file to detect channels and sample rate
+2. Applies frequency filters (telephone profile for 8 kHz source, broadband otherwise)
+3. Resamples to configured Output Sample Rate (default 16000 Hz)
+4. Normalizes loudness (if enabled)
+5. Writes output WAV(s) to Temporary Directory under a unique session subfolder
+
+Stereo files are split into left and right channels processed in parallel.
+
+## Output payload
+
+```json
+{
+  "documentID": "...",
+  "DialogID": "...",
+  "DialogTimeStart": "...",
+  "RecordingFile": "...",
+  "RecordingFileBaseName": "...",
+  "ANI": "...",
+  "Agent": "...",
+  "processed": {
+    "data": {
+      "channels": 2,
+      "size": 2048000,
+      "duration": 64.3,
+      "processTime": 520
+    },
+    "audio": [
+      "/tmp/audioProcessor/abc123/dialog_left.wav",
+      "/tmp/audioProcessor/abc123/dialog_right.wav"
+    ]
+  }
+}
+```
+
+## Configuration
+
+- **Parallel Processes** — Max concurrent audio processing jobs (semaphore limit)
+- **Output Sample Rate** — Target Hz for resampled output (default 16000)
+- **Normalize** — Apply loudness normalization via ffmpeg `loudnorm` filter
+- **Temporary Directory** — Base path for preprocessed WAV files
+
+## Requirements
+
+- `ffmpeg` binary must be installed on the server
+- npm: `fluent-ffmpeg`, `async-sema` (auto-installed via `exports.npm`)
+</readme>
