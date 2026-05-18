@@ -1,0 +1,551 @@
+<script total>
+
+	var COMPONENT_NAME = 'Save files';
+	exports.id = 'save_files';
+	exports.name = 'Save files';
+	exports.group = 'Web';
+	exports.icon = 'ti ti-folders';
+	exports.author = 'Demon';
+	exports.version = '1.1.1';
+	exports.config = {
+		filesPath: 'files',
+		storePath: '/tmp/{{ $data.files.filename }}.{{ $data.files.extension }}',
+		dateTimeEmbedding: 'true',
+		dateTimePath: '',
+		passRequest: 'false',
+		embedStorePath: 'false',
+		embeddingPath: '{{ $data.storedPath }}',
+		debug_enabled: false,
+		debug_nameid: true,
+		debug_to_output: false,
+		debug_timestamp: true,
+		debug_timezone: 'UTC',
+		debug_json: false
+	};
+	exports.inputs = [{ id: 'input', name: 'Payload' }];
+	exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'error', name: 'error' }, { id: 'debug', name: 'debug' }];
+
+	exports.make = function(instance, config) {
+
+		var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+		var getTimestamp = function() {
+			try {
+				var now = new Date();
+				var timezone = config.debug_timezone || 'UTC';
+				if (timezone.match(/^GMT[+-]\d+$/)) {
+					var offset = parseInt(timezone.substring(3));
+					var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+					var adjustedTime = new Date(utcTime + (offset * 3600000));
+					var year = adjustedTime.getUTCFullYear();
+					var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+					var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+					var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+					var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+					var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+					var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+					return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+				}
+				var formatter = new Intl.DateTimeFormat('en-US', {
+					timeZone: timezone,
+					year: 'numeric', month: '2-digit', day: '2-digit',
+					hour: '2-digit', minute: '2-digit', second: '2-digit',
+					fractionalSecondDigits: 3, hour12: false
+				});
+				var parts = formatter.formatToParts(now);
+				var dateParts = {};
+				for (var part of parts)
+					dateParts[part.type] = part.value;
+				return dateParts.year + '-' + dateParts.month + '-' + dateParts.day + ' ' +
+					dateParts.hour + ':' + dateParts.minute + ':' + dateParts.second + '.' +
+					dateParts.fractionalSecond + '000';
+			} catch (e) {
+				var d = new Date();
+				var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+				return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+			}
+		};
+
+		var logMessage = function(level, message) {
+			if (!config.debug_enabled) return;
+			var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+			var sendToOutput = config.debug_to_output;
+			var output;
+			if (config.debug_json) {
+				var entry = {};
+				if (config.debug_timestamp) entry.time = getTimestamp();
+				if (config.debug_nameid) {
+					entry.component = COMPONENT_NAME;
+					entry.nodeId = '[' + instance.id + ']';
+				}
+				entry.level = level;
+				entry.message = message;
+				output = JSON.stringify(entry);
+			} else {
+				var parts = [];
+				if (config.debug_timestamp) parts.push(getTimestamp());
+				if (config.debug_nameid) parts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+				parts.push(paddedLevel);
+				parts.push(message);
+				output = parts.join(' ');
+			}
+			if (sendToOutput) {
+				try {
+					var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+					m.send('debug');
+				} catch (e) {}
+			} else {
+				console.log(output);
+			}
+		};
+
+		// Access TotalJS Flow global variables
+		var getFlowVars = function() {
+			try {
+				return (instance.main && instance.main.variables) || {};
+			} catch (e) {
+				return {};
+			}
+		};
+
+		// Resolve {{ $data.path }} and {{ $FLOW_VARS.key }} templates in a string
+		var resolveValue = function(valueStr, data) {
+			if (typeof valueStr !== 'string') return valueStr == null ? '' : String(valueStr);
+			return valueStr.replace(/\{\{\s*([^\}]+)\s*\}\}/g, function(match, expression) {
+				expression = expression.trim();
+				if (expression.startsWith('$data.')) {
+					var val = U.get(data, expression.substring(6));
+					return (val !== undefined && val !== null) ? val : '<bad expression>';
+				}
+				if (expression.startsWith('$FLOW_VARS.')) {
+					var vars = getFlowVars();
+					var v = vars[expression.substring(11)];
+					return (v !== undefined && v !== null) ? v : '<bad expression>';
+				}
+				return '<bad expression>';
+			});
+		};
+
+		// Extract the data path string from a {{ $data.X }} template → 'X'
+		var resolveEmbeddingPath = function(template) {
+			if (!template) return null;
+			var match = template.trim().match(/^\{\{\s*\$data\.([^\}\s]+)\s*\}\}$/);
+			return match ? match[1].trim() : null;
+		};
+
+		// Parse a value as a Unix/ISO timestamp; returns Date or null
+		var parseTimestamp = function(value) {
+			if (value == null || value === '' || value === '<bad expression>') return null;
+			if (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+				return new Date(value > 9999999999 ? value : value * 1000);
+			var s = String(value).trim();
+			if (!s) return null;
+			if (/^\d+$/.test(s)) {
+				if (s.length === 10) return new Date(parseInt(s) * 1000);
+				if (s.length === 13) return new Date(parseInt(s));
+				return null; // not a valid epoch length
+			}
+			var d = new Date(s);
+			return isNaN(d.getTime()) ? null : d;
+		};
+
+		// Resolve DateTime config to a Date; falls back to current time on failure
+		var resolveDateTime = function(data) {
+			var dtPath = (config.dateTimePath || '').trim();
+			if (!dtPath) return new Date();
+			var resolved = resolveValue(dtPath, data);
+			var date = parseTimestamp(resolved);
+			if (!date) {
+				logMessage('DEBUG', 'DateTime path "' + dtPath + '" resolved to "' + resolved + '" — not a valid timestamp, using current time');
+				return new Date();
+			}
+			return date;
+		};
+
+		// Inject YYYY/MM/DD/HH before the filename segment in a file path
+		var embedDateTime = function(path, date) {
+			var seg = date.getFullYear() + '/' +
+				String(date.getMonth() + 1).padStart(2, '0') + '/' +
+				String(date.getDate()).padStart(2, '0') + '/' +
+				String(date.getHours()).padStart(2, '0');
+			var i = path.lastIndexOf('/');
+			return i === -1
+				? seg + '/' + path
+				: path.substring(0, i) + '/' + seg + '/' + path.substring(i + 1);
+		};
+
+		// Resolve dot-notation path into a nested object value
+		var resolvePath = function(obj, path) {
+			if (!path) return obj;
+			var parts = path.split('.');
+			var cur = obj;
+			for (var p = 0; p < parts.length; p++) {
+				if (cur === null || cur === undefined || typeof cur !== 'object') return undefined;
+				cur = cur[parts[p]];
+			}
+			return cur;
+		};
+
+		// Move a file to targetPath, creating parent directories first (sync mkdir, async rename)
+		// Resolves { ok: true, path } on success or { ok: false, errMsg } on failure
+		var moveFile = function(file, targetPath) {
+			return new Promise(function(resolve) {
+				try {
+					F.path.mkdir(F.Path.dirname(targetPath), true);
+					file.rename(targetPath, function(err) {
+						if (err) {
+							var msg = 'Move failed for "' + targetPath + '": ' + (err.message || err);
+							logMessage('ERROR', msg);
+							resolve({ ok: false, errMsg: msg });
+						} else {
+							resolve({ ok: true, path: targetPath });
+						}
+					});
+				} catch (e) {
+					var msg = 'moveFile exception: ' + e.message;
+					logMessage('ERROR', msg);
+					resolve({ ok: false, errMsg: msg });
+				}
+			});
+		};
+
+		instance.message = async function($) {
+
+			var data = $.data;
+			var filesPath = (config.filesPath || 'files').trim();
+			var files = resolvePath(data, filesPath);
+
+			if (!Array.isArray(files) || files.length === 0) {
+				logMessage('WARNING', 'No files array found at path "' + filesPath + '"');
+				$.send('output', {});
+				return;
+			}
+
+			// Last segment of filesPath is used as the key in templates and output
+			var fileKey = filesPath.split('.').pop();
+			var storedPaths = [];
+
+			for (var i = 0; i < files.length; i++) {
+				var file = files[i];
+				file.index = i;
+
+				// Per-file template context: current file object is accessible as $data.<fileKey>
+				var ctx = {};
+				for (var k in data) {
+					if (data.hasOwnProperty(k))
+						ctx[k] = data[k];
+				}
+				ctx[fileKey] = file;
+
+				// Resolve Store Path template for this file
+				var targetPath = resolveValue((config.storePath || '').trim(), ctx);
+				if (!targetPath || targetPath === '<bad expression>') {
+					logMessage('ERROR', 'Store Path resolved to invalid value for file "' + (file.filename || file.name || i) + '"');
+					continue;
+				}
+
+				// Optionally embed YYYY/MM/DD/HH into the path
+				if (String(config.dateTimeEmbedding) !== 'false') {
+					var dtDate = resolveDateTime(ctx);
+					targetPath = embedDateTime(targetPath, dtDate);
+				}
+
+				logMessage('DEBUG', 'Moving "' + (file.filename || file.name || i) + '" → "' + targetPath + '"');
+
+				var result = await moveFile(file, targetPath);
+				if (!result.ok) {
+					$.send('error', { status: '500 Internal Server Error', text: result.errMsg });
+					return;
+				}
+				file.storedPath = result.path;
+				delete file.path;
+				file.removable = false;
+				storedPaths.push(result.path);
+				logMessage('INFO', 'Stored "' + (file.filename || file.name) + '" at "' + result.path + '"');
+			}
+
+			// Build output
+			var output;
+
+			if (String(config.passRequest) !== 'true') {
+				// Pass Request = false: send only the files array under fileKey
+				output = {};
+				output[fileKey] = files;
+			} else {
+				// Pass Request = true: send entire input data with files extended
+				output = data;
+
+				if (String(config.embedStorePath) === 'true' && storedPaths.length > 0) {
+					var embPath = resolveEmbeddingPath((config.embeddingPath || '').trim());
+					if (embPath) {
+						var fpVal = storedPaths.length === 1 ? storedPaths[0] : storedPaths;
+						var existing = U.get(output, embPath);
+						if (existing !== undefined) {
+							$.send('error', { status: '500 Internal Server Error', text: 'Stored data path key already exists at "' + embPath + '"' });
+							return;
+						}
+						U.set(output, embPath, fpVal);
+					}
+				}
+			}
+
+			$.send('output', output);
+		};
+
+	};
+
+</script>
+
+<settings>
+
+	<script>
+		var sf_timezones = [
+			'UTC',
+			'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+			'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+			'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+			'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+			'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+			'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+			'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+			'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+			'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+			'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+			'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+			'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+		];
+	</script>
+
+	<div class="padding">
+
+		<div style="font-size: 16px; padding: 4px 0 8px;"><b>Main Settings</b></div>
+
+		<div class="row">
+			<div class="col-md-8 m">
+				<ui-component name="input" path="?.filesPath" config="required:1;monospace:1;placeholder:files">Files Path</ui-component>
+			</div>
+			<div class="col-md-4 m">
+				<ui-component name="input" path="?.dateTimeEmbedding" config="dirsource:true|True,false|False">DateTime Embedding</ui-component>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="col-md-8 m">
+				<ui-component name="input" path="?.storePath" config="required:1;monospace:1;placeholder:/recordings/{{ $data.files.filename }}">Store Path</ui-component>
+			</div>
+			<div class="col-md-4 m">
+				<ui-component name="input" path="?.dateTimePath" config="monospace:1;placeholder:DateTime key or empty">DateTime Path</ui-component>
+			</div>
+		</div>
+
+		<details class="sf-details">
+			<summary class="sf-summary"><b>Advanced Settings</b></summary>
+			<div class="sf-content">
+				<div class="row">
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.passRequest" config="dirsource:true|True,false|False">Pass Request</ui-component>
+					</div>
+					<div class="col-md-3 m">
+						<ui-component name="input" path="?.embedStorePath" config="dirsource:true|True,false|False">Embed Store Path</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.embeddingPath" config="monospace:1;placeholder:{{ $data.storedPath }}">Embedding Key Path</ui-component>
+					</div>
+				</div>
+			</div>
+		</details>
+
+		<details class="sf-details">
+			<summary class="sf-summary"><b>Debug Configuration</b></summary>
+			<div class="sf-content">
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+					</div>
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+					</div>
+				</div>
+				<div class="row">
+					<div class="col-md-6 m">
+						<ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+					</div>
+					<div class="col-md-6">
+						<div class="sf-timezone-wrapper m">
+							<ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+							<ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:sf_timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+						</div>
+					</div>
+				</div>
+			</div>
+		</details>
+
+	</div>
+</settings>
+
+<style>
+	.CLASS { border-color: #25383C !important; }
+	.CLASS header { background-color: #25383C; color: white; }
+	.CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+
+	/* Fix directory dropdown positioning */
+	#flow_settings .ui-directory { position: fixed !important; }
+
+	/* Input field styling */
+	#flow_settings input[type="text"],
+	#flow_settings select {
+		font-family: Consolas, monospace !important;
+		color: darkblue !important;
+	}
+	.ui-dark #flow_settings input[type="text"],
+	.ui-dark #flow_settings select { color: #6fa8dc !important; }
+
+	/* Collapsible sections */
+	.sf-details { margin-top: 12px; border: none; }
+	.sf-summary {
+		cursor: pointer;
+		list-style: none;
+		font-size: 16px;
+		padding: 4px 0 8px;
+		user-select: none;
+	}
+	.sf-summary::-webkit-details-marker { display: none; }
+	.sf-summary::before { content: '\25B6'; display: inline-block; margin-right: 10px; transition: transform 0.15s ease; }
+	.sf-details[open] .sf-summary::before { transform: rotate(90deg); }
+	.sf-content { padding-top: 8px; padding-bottom: 4px; }
+
+	/* Timezone field */
+	.sf-timezone-wrapper { width: 65%; }
+	.sf-timezone-wrapper .ui-input-label { font-size: inherit !important; color: inherit !important; }
+</style>
+
+<body>
+	<header>
+		<i class="$ICON"></i>$NAME
+	</header>
+</body>
+
+<readme>
+# Save files
+
+Moves uploaded files from their temporary location to a permanent store path. Extends the native `Uploaded files` component with dynamic path templates, automatic date/time directory injection, and flexible output shaping.
+
+## Inputs / Outputs
+
+- **Payload** — Incoming message containing a files array (from `Route [advanced]` or similar)
+- **Output** — Processed result (shape depends on Pass Request / Embed Store Path settings)
+- **error** — Fired on any OS-level move failure or on an Embedding Key Path collision: `{ "status": "500 Internal Server Error", "text": "..." }`
+- **debug** — Formatted debug/error messages when debug is enabled
+
+## Main Settings
+
+### Files Path
+Dot-notation path to the files array inside the incoming payload. Default: `files`.
+
+| Example payload key | Files Path value |
+|---|---|
+| `{ "files": [...] }` | `files` |
+| `{ "request": { "files": [...] } }` | `request.files` |
+
+### Store Path
+Absolute destination path for each file. Supports template variables:
+
+| Expression | Resolves to |
+|---|---|
+| `{{ $data.files.filename }}` | Uploaded file name (e.g. `test.wav`) |
+| `{{ $data.files.extension }}` | File extension without dot (e.g. `wav`) |
+| `{{ $data.files.name }}` | Form field name (e.g. `RecordingFile`) |
+| `{{ $data.payload.DialogID }}` | Any other key from the input payload |
+| `{{ $FLOW_VARS.basePath }}` | TotalJS Flow global variable |
+
+Default: `/tmp/{{ $data.files.filename }}.{{ $data.files.extension }}`
+
+### DateTime Embedding
+When **True** (default), injects `YYYY/MM/DD/HH` before the filename in Store Path:
+
+```
+/Recordings/test.wav              →  /Recordings/2026/05/01/14/test.wav
+/Recordings/audio/test.wav        →  /Recordings/audio/2026/05/01/14/test.wav
+```
+
+### DateTime Path
+Source for the date/time used in embedding. Leave empty to use the current server time.
+
+- Static value: `1748000125` or `2026-04-30T14:34:13.000`
+- Template: `{{ $data.DialogTimeEnd }}`
+
+Accepted formats: Unix Epoch (10-digit seconds or 13-digit ms) and ISO 8601 strings. Invalid or missing values fall back silently to the current time.
+
+## Advanced Settings
+
+### Pass Request
+- **False** (default) — Output contains only the files array under its key, each file extended with `storedPath`
+- **True** — Output contains the entire input payload, with the files array extended in place
+
+### Embed Store Path
+Requires **Pass Request = True**. When **True**, writes the stored path value directly into the key specified by **Embedding Key Path**.
+
+- Single file → the key receives a string: `"/path/to/file.wav"`
+- Multiple files → the key receives an array: `["/path/1.wav", "/path/2.wav"]`
+
+### Embedding Key Path
+The exact output key to write the stored path value into. Default: `{{ $data.storedPath }}`.
+
+- Must point to a key that does **not yet exist** in the output — if the key already holds a value, the message is routed to the **error** output instead of overwriting it
+- Supports any depth: `{{ $data.request.payload.filePath }}` writes directly to `data.request.payload.filePath`
+
+## Output shapes
+
+### Pass Request = False
+```json
+{
+  "files": [
+    {
+      "storedPath": "/Recordings/2026/05/01/14/test.wav",
+      "filename": "test.wav",
+      "removable": false,
+      "index": 0,
+      ...
+    }
+  ]
+}
+```
+
+### Pass Request = True, Embed Store Path = False
+```json
+{
+  "headers": { ... },
+  "payload": { ... },
+  "files": [
+    { "storedPath": "/Recordings/2026/05/01/14/test.wav", "removable": false, ... }
+  ]
+}
+```
+
+### Pass Request = True, Embed Store Path = True, Embedding Key Path = `{{ $data.payload.filePath }}`
+```json
+{
+  "headers": { ... },
+  "payload": {
+    "DialogID": "testID-17022",
+    "filePath": "/Recordings/2026/05/01/14/test.wav"
+  },
+  "files": [ ... ]
+}
+```
+
+## Notes
+
+- Each moved file has `removable` set to `false`, gains a `storedPath` key, and loses the temporary `path` key
+- If any file fails to move, the message is immediately routed to the **error** output and processing stops
+- If **Embedding Key Path** points to a key that already exists, the message is routed to the **error** output — the existing value is never overwritten
+- Parent directories are created automatically if they do not exist
+</readme>

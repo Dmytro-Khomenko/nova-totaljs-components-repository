@@ -7,7 +7,7 @@
 	exports.group = 'Jambonz';
 	exports.icon = 'ti ti-atom';
 	exports.author = 'Demon';
-	exports.version = '5.10.1';
+	exports.version = '5.11.0';
 	exports.npm = ['redis'];
 
 	exports.config = {
@@ -178,7 +178,7 @@
 
 			var payload = {};
 			for (var k in tagData) {
-				if (Object.prototype.hasOwnProperty.call(tagData, k) && k !== 'flowPath' && k !== 'vendor' && k !== 'language' && k !== 'voice') {
+				if (Object.prototype.hasOwnProperty.call(tagData, k) && k !== 'flowPath' && k !== 'vendor' && k !== 'language' && k !== 'voice' && k !== 'custom') {
 					payload[k] = tagData[k];
 				}
 			}
@@ -485,6 +485,7 @@
 			result.step_num = (typeof rawStep === 'number' ? rawStep : parseInt(rawStep, 10) || 0) + 1;
 			result.loop_num = typeof cd.loop_num === 'number' ? cd.loop_num : 0;
 			if (Array.isArray(cd.flowPath)) result.flowPath = cd.flowPath;
+			if (cd.custom && typeof cd.custom === 'object' && !Array.isArray(cd.custom)) result.custom = cd.custom;
 
 			// ASR results: prefer top-level speech.alternatives (Jambonz-normalised),
 			// fall back to speech.vendor.evt.alternatives (raw vendor event)

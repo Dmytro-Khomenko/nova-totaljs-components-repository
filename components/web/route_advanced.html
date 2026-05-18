@@ -1,0 +1,609 @@
+<script total>
+
+    var COMPONENT_NAME = 'Route [advanced]';
+    exports.id = 'route_advanced';
+    exports.name = 'Route [advanced]';
+    exports.group = 'Web';
+    exports.icon = 'ti ti-arrow-circle-right';
+    exports.author = 'Demon';
+    exports.version = '1.1.1';
+    exports.config = {
+        method: 'GET',
+        url: '/receiver',
+        user: 0,
+        timeout: 5000,
+        limit: 5120,
+        upload: false,
+        reader: '-',
+        allowedFormats: '.wav, .mp3, .mp4, .mpeg, .mpga, .m4a',
+        sendHeaders: false,
+        sendPayload: true,
+        sendUser: false,
+        sendCookies: false,
+        sendQuery: false,
+        sendParams: false,
+        debug_enabled: false,
+        debug_nameid: true,
+        debug_to_output: false,
+        debug_timestamp: true,
+        debug_errors_to_output: false,
+        debug_timezone: 'UTC',
+        debug_json: false,
+        debug_requests: false,
+        debug_responses: false
+    };
+    exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
+    exports.kind = 'trigger';
+
+    exports.make = function(instance, config) {
+
+        var LEVEL_PAD = { 'ERROR': 'ERROR  ', 'INFO': 'INFO   ', 'DEBUG': 'DEBUG  ', 'WARNING': 'WARNING' };
+
+        var getTimestamp = function() {
+            try {
+                var now = new Date();
+                var timezone = config.debug_timezone || 'UTC';
+
+                if (timezone.match(/^GMT[+-]\d+$/)) {
+                    var offset = parseInt(timezone.substring(3));
+                    var utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+                    var adjustedTime = new Date(utcTime + (offset * 3600000));
+                    var year = adjustedTime.getUTCFullYear();
+                    var month = String(adjustedTime.getUTCMonth() + 1).padStart(2, '0');
+                    var day = String(adjustedTime.getUTCDate()).padStart(2, '0');
+                    var hour = String(adjustedTime.getUTCHours()).padStart(2, '0');
+                    var minute = String(adjustedTime.getUTCMinutes()).padStart(2, '0');
+                    var second = String(adjustedTime.getUTCSeconds()).padStart(2, '0');
+                    var ms = String(adjustedTime.getUTCMilliseconds()).padStart(3, '0');
+                    return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms + '000';
+                }
+
+                var formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone,
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    fractionalSecondDigits: 3, hour12: false
+                });
+                var parts = formatter.formatToParts(now);
+                var dateParts = {};
+                for (var part of parts)
+                    dateParts[part.type] = part.value;
+                return dateParts.year + '-' + dateParts.month + '-' + dateParts.day + ' ' +
+                    dateParts.hour + ':' + dateParts.minute + ':' + dateParts.second + '.' +
+                    dateParts.fractionalSecond + '000';
+            } catch (e) {
+                var d = new Date();
+                var ms = String(d.getUTCMilliseconds()).padStart(3, '0');
+                return d.toISOString().replace('T', ' ').replace('Z', '').replace(/\.\d+/, '.' + ms + '000');
+            }
+        };
+
+        var logMessage = function(level, message, isError) {
+            if (!config.debug_enabled) return;
+
+            var paddedLevel = LEVEL_PAD[level] || (level + '       ').substring(0, 7);
+            var sendToOutput = isError ? config.debug_errors_to_output : config.debug_to_output;
+            var output;
+
+            if (config.debug_json) {
+                var entry = {};
+                if (config.debug_timestamp) entry.time = getTimestamp();
+                if (config.debug_nameid) {
+                    entry.component = COMPONENT_NAME;
+                    entry.nodeId = '[' + instance.id + ']';
+                }
+                entry.level = level;
+                entry.message = message;
+                output = JSON.stringify(entry);
+            } else {
+                var parts = [];
+                if (config.debug_timestamp) parts.push(getTimestamp());
+                if (config.debug_nameid) parts.push(COMPONENT_NAME + ' [' + instance.id + ']');
+                parts.push(paddedLevel);
+                parts.push(message);
+                output = parts.join(' ');
+            }
+
+            if (sendToOutput) {
+                try {
+                    var m = instance.newmessage(config.debug_json ? JSON.parse(output) : output);
+                    m.send('debug');
+                } catch (e) {}
+            } else {
+                console.log(output);
+            }
+        };
+
+        var prev = null;
+
+        instance.close = function() {
+            prev && prev.remove();
+            prev = null;
+        };
+
+        instance.configure = function() {
+
+            if (prev) {
+                prev.remove();
+                prev = null;
+            }
+
+            if (!config.url || !config.method) return;
+
+            var flags = [];
+            config.timeout && flags.push(F.is5 ? ('<' + Math.ceil(config.timeout / 1000) + 's') : config.timeout);
+            if (F.is5) flags.push('<' + Math.ceil(config.limit / 1024) + 'MB');
+            config.upload && flags.push((F.is5 ? '@' : '') + 'upload');
+
+            var action = function($) {
+
+                var ctrl = F.is5 ? $ : this;
+
+                // Parse cookies from request headers
+                var cookies = {};
+                var cookie = ctrl.headers && ctrl.headers.cookie;
+                if (cookie) {
+                    var arr = cookie.split(';');
+                    for (var i = 0; i < arr.length; i++) {
+                        var line = arr[i].trim();
+                        var idx = line.indexOf('=');
+                        if (idx !== -1)
+                            cookies[line.substring(0, idx)] = line.substring(idx + 1);
+                    }
+                }
+
+                // Debug: log incoming request details
+                if (config.debug_requests) {
+                    var reqInfo = {
+                        method: config.method,
+                        url: ctrl.url,
+                        ip: ctrl.ip,
+                        query: ctrl.query,
+                        headers: ctrl.headers
+                    };
+                    if (ctrl.body && typeof ctrl.body === 'object' && Object.keys(ctrl.body).length)
+                        reqInfo.body = ctrl.body;
+                    if (ctrl.files && ctrl.files.length)
+                        reqInfo.files = ctrl.files.map(function(f) { return { name: f.filename || f.name, ext: f.ext, size: f.size }; });
+                    logMessage('INFO', 'Incoming ' + config.method + ' ' + ctrl.url + ' from ' + (ctrl.ip || 'unknown'));
+                    logMessage('DEBUG', 'Request details: ' + JSON.stringify(reqInfo));
+                }
+
+                // Reject files when upload is disabled
+                if (!config.upload && ctrl.files && ctrl.files.length > 0) {
+                    logMessage('WARNING', 'Files submitted but upload is disabled — responding 400', false);
+                    var uploadErrBody = JSON.stringify({ error: 'Bad request', text: 'Uploading files is not supported' });
+                    if (F.is5) {
+                        ctrl.res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                        ctrl.res.end(uploadErrBody);
+                    } else {
+                        ctrl.status = 400;
+                        ctrl.json({ error: 'Bad request', text: 'Uploading files is not supported' });
+                    }
+                    return;
+                }
+
+                // Validate uploaded file extensions when upload is enabled
+                if (config.upload && ctrl.files && ctrl.files.length > 0 && config.allowedFormats) {
+                    var allowedExts = config.allowedFormats.split(',')
+                        .map(function(e) { return e.trim().toLowerCase().replace(/^\./, ''); })
+                        .filter(function(e) { return e.length > 0; });
+
+                    if (allowedExts.length > 0) {
+                        for (var fi = 0; fi < ctrl.files.length; fi++) {
+                            var file = ctrl.files[fi];
+                            var fileExt = (file.ext || '').toLowerCase().replace(/^\./, '');
+                            if (allowedExts.indexOf(fileExt) === -1) {
+                                var supportedList = allowedExts.map(function(e) { return '.' + e; }).join(', ');
+                                var fileName = file.filename || file.name || ('file' + fi);
+                                logMessage('WARNING', 'Rejected "' + fileName + '" — unsupported extension: .' + fileExt + '. Allowed: ' + supportedList, false);
+                                var fmtErrBody = JSON.stringify({
+                                    error: 'Unsupported Media Type',
+                                    text: 'Unsupported file format. Supported formats: ' + supportedList
+                                });
+                                if (F.is5) {
+                                    ctrl.res.writeHead(415, { 'Content-Type': 'application/json; charset=utf-8' });
+                                    ctrl.res.end(fmtErrBody);
+                                } else {
+                                    ctrl.status = 415;
+                                    ctrl.json({ error: 'Unsupported Media Type', text: 'Unsupported file format. Supported formats: ' + supportedList });
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Build output data based on selected boolean flags
+                var hasSelection = config.sendHeaders || config.sendPayload || config.sendUser ||
+                                   config.sendCookies || config.sendQuery || config.sendParams;
+                var data;
+
+                if (hasSelection) {
+                    data = {};
+                    if (config.sendHeaders)  data.headers  = ctrl.headers;
+                    if (config.sendPayload)  data.payload  = ctrl.body;
+                    if (config.sendUser)     data.user     = ctrl.user;
+                    if (config.sendCookies)  data.cookies  = cookies;
+                    if (config.sendQuery)    data.query    = ctrl.query;
+                    if (config.sendParams)   data.params   = ctrl.params;
+                } else {
+                    // Nothing selected — send everything like native route
+                    data = {
+                        payload:  ctrl.body,
+                        query:    ctrl.query,
+                        user:     ctrl.user,
+                        url:      ctrl.url,
+                        headers:  ctrl.headers,
+                        params:   ctrl.params,
+                        ip:       ctrl.ip,
+                        cookies:  cookies,
+                        ua:       ctrl.ua
+                    };
+                }
+
+                // Always attach files array when upload is enabled
+                if (config.upload) data.files = ctrl.files;
+
+                var msg = instance.newmessage();
+                msg.refs.controller = ctrl;
+
+                var dispatchOutput = function() {
+                    // Debug: log outgoing output data
+                    if (config.debug_responses) {
+                        logMessage('INFO', 'Dispatching output to flow');
+                        logMessage('DEBUG', 'Output data: ' + JSON.stringify(data));
+                    }
+                    msg.send('output', data);
+                };
+
+                if (config.upload && config.reader && config.reader !== '-') {
+                    ctrl.files.wait(function(file, next) {
+                        file.read(function(err, buffer) {
+                            var type = config.reader;
+                            if (type === 'datauri') type = 'base64';
+                            file.data = type === 'buffer' ? buffer : buffer.toString(type);
+                            if (config.reader === 'datauri')
+                                file.data = 'data:' + file.type + ';base64,' + file.data;
+                            next();
+                        });
+                    }, dispatchOutput);
+                } else {
+                    dispatchOutput();
+                }
+            };
+
+            var auth = config.user == 1 ? '+' : config.user == 2 ? '-' : '';
+            var url = config.url.replace(/#/g, instance.main.id);
+            prev = F.is5
+                ? ROUTE(auth + config.method + ' ' + url + ' ' + flags.join(' '), action)
+                : ROUTE(auth + config.method + ' ' + instance.replace(url), action, flags, config.limit);
+        };
+
+        instance.configure();
+    };
+
+</script>
+
+<settings>
+
+    <script>
+        var methods = ['GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'DELETE'];
+        var timezones = [
+            'UTC',
+            'GMT-12', 'GMT-11', 'GMT-10', 'GMT-9', 'GMT-8', 'GMT-7', 'GMT-6', 'GMT-5', 'GMT-4', 'GMT-3', 'GMT-2', 'GMT-1',
+            'GMT+0', 'GMT+1', 'GMT+2', 'GMT+3', 'GMT+4', 'GMT+5', 'GMT+6', 'GMT+7', 'GMT+8', 'GMT+9', 'GMT+10', 'GMT+11', 'GMT+12',
+            'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome', 'Europe/Madrid',
+            'Europe/Amsterdam', 'Europe/Brussels', 'Europe/Vienna', 'Europe/Warsaw', 'Europe/Prague',
+            'Europe/Budapest', 'Europe/Bucharest', 'Europe/Athens', 'Europe/Helsinki', 'Europe/Stockholm',
+            'Europe/Oslo', 'Europe/Copenhagen', 'Europe/Dublin', 'Europe/Lisbon',
+            'Europe/Kiev', 'Europe/Minsk', 'Europe/Istanbul', 'Europe/Zurich',
+            'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore',
+            'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Asia/Jakarta',
+            'Asia/Manila', 'Asia/Kuala_Lumpur', 'Asia/Taipei', 'Asia/Jerusalem', 'Asia/Riyadh',
+            'Asia/Tehran', 'Asia/Baku', 'Asia/Yerevan', 'Asia/Tbilisi', 'Asia/Almaty',
+            'Asia/Tashkent', 'Asia/Bishkek', 'Asia/Ashgabat'
+        ];
+    </script>
+
+    <div class="padding">
+
+        <div style="font-size: 16px; padding: 4px 0 8px;"><b>Main Settings</b></div>
+
+        <!-- Row 1: Method (240px) | Relative Listen URL (50% of panel) -->
+        <div class="ra-row">
+            <div class="ra-fixed">
+                <ui-component name="input" path="?.method" config="required:1;dirsource:methods" class="m">Method</ui-component>
+            </div>
+            <div style="flex: 1;">
+                <ui-component name="input" path="?.url" config="monospace:1;required:1;placeholder:/receiver" class="m">Relative Listen URL</ui-component>
+            </div>
+        </div>
+
+        <!-- Row 2: Continue as (240px) | Request Timeout (25%) | Request Size Limit (25%) -->
+        <div class="ra-row">
+            <div class="ra-fixed">
+                <div class="ui-input-label">Continue as:</div>
+                <ui-component name="choose" path="?.user" config="selector:div;type:number" class="iconmenu m">
+                    <div data-id="1" style="width:80px">
+                        <i class="ti ti-lock"></i>
+                        <span>Authorized</span>
+                    </div>
+                    <div data-id="2" style="width:80px">
+                        <i class="ti ti-unlock"></i>
+                        <span>Unauthorized</span>
+                    </div>
+                    <div data-id="0" style="width:80px">
+                        <i class="ti ti-door-open"></i>
+                        <span>Both</span>
+                    </div>
+                </ui-component>
+            </div>
+            <div style="flex: 1;" class="ra-tall-field ra-timeout-field">
+                <div class="ra-field-header">
+                    <span class="ra-field-name"><span class="ra-asterisk">*</span> Request Timeout</span>
+                    <span class="ra-field-hint"><i class="ti ti-clock"></i> <ui-bind path="?.timeout" config="text:((value/1000||0)) + ' sec'"></ui-bind></span>
+                </div>
+                <ui-component name="input" path="?.timeout" config="required:1;type:number;format:" class="m"></ui-component>
+            </div>
+            <div style="flex: 1;" class="ra-tall-field ra-limit-field">
+                <div class="ra-field-header">
+                    <span class="ra-field-name"><span class="ra-asterisk">*</span> Request Size Limit</span>
+                    <span class="ra-field-hint"><i class="ti ti-calculator"></i> <ui-bind path="?.limit" config="text:(value||0).filesize()"></ui-bind></span>
+                </div>
+                <ui-component name="input" path="?.limit" config="required:1;type:number;ricon:!kB;align:1;format:" class="m"></ui-component>
+            </div>
+        </div>
+
+        <!-- Uploading File Settings (collapsed) -->
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Uploading File Settings</b></summary>
+            <div class="maintenance-content">
+                <div class="row">
+                    <div class="col-md-12 m">
+                        <ui-component name="input" path="?.upload" config="type:checkbox"><b>Allow uploading files (via form data)</b></ui-component>
+                    </div>
+                </div>
+                <ui-bind path="?.upload" config="enabled">
+                    <div class="row">
+                        <div class="col-md-6 m">
+                            <ui-component name="input" path="?.reader" config="dirsource:-|Keep as files,buffer|Buffer,utf8|UTF-8,ascii|ASCII,datauri|Data URI,base64|Base64,hex|Hex">Read files to</ui-component>
+                        </div>
+                    </div>
+                </ui-bind>
+                <div class="row">
+                    <div class="col-md-12 m">
+                        <ui-component name="input" path="?.allowedFormats" config="placeholder:.wav, .mp3, .mp4">Allowed file formats</ui-component>
+                        <div class="help">Comma-separated list of allowed extensions (e.g. <code>.wav, .mp3, .mp4</code>). Leave empty to allow all formats. Files with unlisted extensions receive a <b>415 Unsupported Media Type</b> response.</div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <!-- Output Format Settings (collapsed) -->
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Output Format Settings</b></summary>
+            <div class="maintenance-content">
+                <div class="help m">Select which parts of the incoming request to include in the output. Combine freely. If nothing is selected, everything is sent.</div>
+                <div class="row">
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.sendHeaders" config="type:checkbox">Headers</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.sendUser" config="type:checkbox">User</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.sendQuery" config="type:checkbox">Query arguments</ui-component>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.sendPayload" config="type:checkbox">Payload</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.sendCookies" config="type:checkbox">Cookies</ui-component>
+                    </div>
+                    <div class="col-md-4 m">
+                        <ui-component name="input" path="?.sendParams" config="type:checkbox">Dynamic parameters</ui-component>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <!-- Debug Configuration (collapsed) -->
+        <details class="maintenance-details">
+            <summary class="maintenance-summary"><b>Debug Configuration</b></summary>
+            <div class="maintenance-content">
+
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_enabled" config="type:checkbox">Enable component debug</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_nameid" config="type:checkbox">Send Name and ID</ui-component>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_to_output" config="type:checkbox">Send debug to Debug output</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_timestamp" config="type:checkbox">Timestamp (ISO 8601)</ui-component>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6 m maintenance-checkbox-group">
+                        <ui-component name="input" path="?.debug_errors_to_output" config="type:checkbox">Send errors to Debug output</ui-component>
+                        <ui-component name="input" path="?.debug_json" config="type:checkbox">JSON output</ui-component>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="timezone-field-wrapper m">
+                            <ui-component name="LAZY directory" config="placeholder:Search..."></ui-component>
+                            <ui-component name="input" path="?.debug_timezone" config="placeholder:Select or type timezone;dirsource:timezones;dircustom:true">Timezone (default is UTC)</ui-component>
+                        </div>
+                    </div>
+                </div>
+
+                <hr />
+
+                <div class="row">
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_requests" config="type:checkbox">Send Requests to Debug output</ui-component>
+                    </div>
+                    <div class="col-md-6 m">
+                        <ui-component name="input" path="?.debug_responses" config="type:checkbox">Send Responses to Debug output</ui-component>
+                    </div>
+                </div>
+
+            </div>
+        </details>
+
+    </div>
+</settings>
+
+<style>
+    .CLASS { border-color: #0747A6 !important; }
+    .CLASS header { background-color: #0747A6; color: white; }
+    .CLASS header i { color: white !important; display: inline-flex; vertical-align: middle; fill: white !important; stroke: white !important; background-color: transparent !important; }
+    .CLASS footer { padding: 10px; font-size: 12px; color: #999; }
+    .CLASS footer .method { background-color: #0747A6; color: #FFF; padding: 2px 5px; border-radius: var(--radius); font-size: 11px; margin-right: 4px; }
+
+    /* Main settings row layout */
+    .ra-row { display: flex; gap: 20px; align-items: flex-start; flex-wrap: nowrap; }
+    .ra-fixed { width: 240px; min-width: 240px; flex-shrink: 0; }
+
+    /* Number fields with label+hint header row */
+    .ra-tall-field { position: relative; }
+    .ra-tall-field .ui-input-control { overflow: visible !important; }
+
+    /* Custom label row: field name + dynamic hint side by side */
+    .ra-field-header { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+    .ra-field-name { font-size: 12px; color: #888; white-space: nowrap; }
+    .ra-asterisk { color: #e74c3c; margin-right: 1px; }
+    .ra-field-hint { font-size: 12px; color: #888; white-space: nowrap; }
+
+    /* Hide the auto-generated label from ui-component — replaced by .ra-field-header */
+    #flow_settings .ra-timeout-field .ui-input-label,
+    #flow_settings .ra-limit-field .ui-input-label { display: none; }
+
+    /* Adjust only Request Timeout and Request Size Limit — isolated from all other fields */
+    #flow_settings .ra-timeout-field .ui-input-control { height: 54px !important; }
+    #flow_settings .ra-timeout-field .ui-input-input { padding: 12px 8px 0; }
+    #flow_settings .ra-timeout-field .ui-input-icon-right { height: 53px; }
+
+    #flow_settings .ra-limit-field .ui-input-control { height: 54px !important; }
+    #flow_settings .ra-limit-field .ui-input-input { padding: 12px 8px 0; }
+    #flow_settings .ra-limit-field .ui-input-icon-right { height: 53px; }
+
+    /* Fix directory dropdown positioning */
+    #flow_settings .ui-directory { position: fixed !important; }
+
+    /* Input field styling */
+    #flow_settings input[type="text"],
+    #flow_settings select {
+        font-family: Consolas, monospace !important;
+        color: darkblue !important;
+    }
+    .ui-dark #flow_settings input[type="text"],
+    .ui-dark #flow_settings select { color: #6fa8dc !important; }
+
+    #flow_settings input[type="number"] {
+        font-family: Consolas, monospace !important;
+        color: darkblue !important;
+    }
+    .ui-dark #flow_settings input[type="number"] { color: #6fa8dc !important; }
+
+    /* Maintenance collapsible */
+    .maintenance-details { margin-top: 12px; border: none; }
+    .maintenance-summary { cursor: pointer; list-style: none; font-size: 16px; padding: 4px 0 8px; user-select: none; }
+    .maintenance-summary::-webkit-details-marker { display: none; }
+    .maintenance-summary::before { content: '\25B6'; display: inline-block; margin-right: 10px; transition: transform 0.15s ease; }
+    .maintenance-details[open] .maintenance-summary::before { transform: rotate(90deg); }
+    .maintenance-content { padding-top: 8px; padding-bottom: 4px; }
+    .maintenance-checkbox-group .ui-input { display: block; margin-bottom: 20px; }
+    .maintenance-checkbox-group .ui-input:last-child { margin-bottom: 0; }
+
+    /* Timezone field */
+    .timezone-field-wrapper { width: 65%; }
+    .timezone-field-wrapper .ui-input-label { font-size: inherit !important; color: inherit !important; }
+</style>
+
+<body>
+    <header>
+        <i class="$ICON"></i>$NAME
+    </header>
+    <footer class="monospace">
+        <ui-bind path="CONFIG" config="template">
+            <script type="text/html">
+                {{ if value.method && value.url }}<span class="method">{{ value.method }}</span>{{ value.url }}{{ fi }}
+            </script>
+        </ui-bind>
+    </footer>
+</body>
+
+<readme>
+# Route [advanced]
+
+An advanced HTTP route listener component that registers an endpoint and forwards incoming request data into the flow. Extends the native Route component with per-field output control, file type validation, and structured debug output.
+
+## Inputs / Outputs
+
+- No inputs — triggered by incoming HTTP requests
+- **Output** — Incoming request data (fields selected in Output Format Settings)
+- **debug** — Formatted debug/error messages when debug is enabled
+
+The `message.refs.controller` property holds the request controller for use by a downstream REST response component.
+
+## Main Settings
+
+| Field | Description |
+|-------|-------------|
+| Method | HTTP method: GET, POST, PUT, PATCH, HEAD, DELETE |
+| Relative Listen URL | Route path relative to the proxy endpoint. Supports wildcards (`/path/*`) and dynamic segments (`/path/{id}/`). `#` is replaced with the FlowStream ID |
+| Continue as | Authorization filter: **Authorized** (+), **Unauthorized** (−), **Both** (no restriction) |
+| Request Timeout | Timeout in milliseconds |
+| Request Size Limit | Maximum request body size in kB |
+
+## Uploading File Settings
+
+- **Allow uploading files** — Enables multipart/form-data file upload
+- **Read files to** — Converts file buffer: Keep as files, Buffer, UTF-8, ASCII, Data URI, Base64, Hex
+- **Allowed file formats** — Comma-separated extension whitelist (e.g. `.wav, .mp3, .mp4`). Files with unlisted extensions receive an immediate **415 Unsupported Media Type** HTTP response:
+
+```json
+{
+  "error": "Unsupported Media Type",
+  "text": "Unsupported file format. Supported formats: .wav, .mp3, .mp4, ..."
+}
+```
+
+Leave the field empty to allow all file types.
+
+## Output Format Settings
+
+Each checkbox independently adds that part of the request to the output object. Combine any combination freely:
+
+| Field | Output key | Description |
+|-------|------------|-------------|
+| Headers | `headers` | HTTP request headers |
+| Payload | `payload` | Parsed request body |
+| User | `user` | Authenticated user object |
+| Cookies | `cookies` | Parsed cookies |
+| Query arguments | `query` | URL query string parameters |
+| Dynamic parameters | `params` | URL path parameters (`{id}`, etc.) |
+
+When nothing is selected, all fields are sent (same as the native Route component's `all` mode). When upload is enabled, `files` is always included regardless of selection.
+
+## Debug Configuration
+
+Same options as Schema Validate and other components in this project:
+
+- **Enable component debug** — Master switch; all debug options require this to be enabled
+- **Send Name and ID / Timestamp / JSON output / Timezone** — Log format options
+- **Send debug to Debug output** — Route INFO/DEBUG messages to the `debug` pin instead of server console
+- **Send errors to Debug output** — Route ERROR/WARNING messages to the `debug` pin
+- **Send Requests to Debug output** — When a request arrives, log its method, URL, IP, headers, query, and body
+- **Send Responses to Debug output** — Log the data object being dispatched to the `output` pin
+</readme>

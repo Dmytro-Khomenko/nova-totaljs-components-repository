@@ -6,7 +6,7 @@
   exports.group = 'Jambonz';
   exports.icon = 'ti ti-atom';
   exports.author = 'Demon';
-  exports.version = '3.8.0';
+  exports.version = '3.9.0';
   exports.config = {
       vendor: 'Google',
       language: 'uk-UA',
@@ -44,7 +44,8 @@
       debug_timestamp: true,
       debug_errors_to_output: false,
       debug_timezone: 'UTC',
-      debug_json: false
+      debug_json: false,
+      sessionVars: {}
   };
   exports.inputs = [{ id: 'input', name: 'Input' }, { id: 'repeat', name: 'Repeat' }];
   exports.outputs = [{ id: 'output', name: 'Output' }, { id: 'debug', name: 'debug' }];
@@ -423,6 +424,17 @@
               return;
           }
 
+          // Compute merged session vars: carry forward existing custom + apply this node's sessionVars
+          var customVars = Object.assign({}, data.custom && typeof data.custom === 'object' && !Array.isArray(data.custom) ? data.custom : {});
+          if (config.sessionVars && typeof config.sessionVars === 'object') {
+              for (var svKey in config.sessionVars) {
+                  if (!Object.prototype.hasOwnProperty.call(config.sessionVars, svKey) || !svKey.trim()) continue;
+                  var svRaw = config.sessionVars[svKey] !== null && config.sessionVars[svKey] !== undefined ? String(config.sessionVars[svKey]) : '';
+                  var svResolved = resolveValue(svRaw, data);
+                  customVars[svKey.trim()] = parseTypedValue(typeof svResolved === 'string' ? svResolved : String(svResolved));
+              }
+          }
+
           // Build gather verb from config
           var gatherVerb = buildGatherVerb(data);
 
@@ -473,8 +485,10 @@
           // Extract verbSayList accumulated by upstream say-prompt nodes (must not appear in tag payload)
           var verbSayListItems = Array.isArray(data.verbSayList) ? data.verbSayList : [];
 
+          var tagPayload = Object.assign({}, callFields, { step_num: ackStepNum, loop_num: loopNum, flowPath: ackFlowPath }, tagExtras);
+          if (Object.keys(customVars).length > 0) tagPayload.custom = customVars;
           var verbs = [
-              { verb: 'tag', data: Object.assign({}, callFields, { step_num: ackStepNum, loop_num: loopNum, flowPath: ackFlowPath }, tagExtras) }
+              { verb: 'tag', data: tagPayload }
           ];
           if (needsAnswer) verbs.push({ verb: 'answer' });
           verbSayListItems.forEach(function(v) { verbs.push(v); });
@@ -754,6 +768,20 @@
                           </div>
                       </div>
                   </div>
+              </div>
+          </div>
+      </details>
+
+      <details class="maintenance-details">
+          <summary class="maintenance-summary"><b>Session Variables</b></summary>
+          <div class="maintenance-content">
+              <div class="row">
+                  <div class="col-md-12 m">
+                      <ui-component name="keyvalue" path="?.sessionVars" config="placeholderkey:Variable name;placeholdervalue:Value or {{ $data.field }}">Variables</ui-component>
+                  </div>
+              </div>
+              <div class="help adv-help">
+                  Written into <code>custom</code> in the session tag and carried across all turns. Supports template syntax: <code>{{ $data.fieldName }}</code>. Values are auto-typed (boolean, integer, string). Multiple nodes append; same key in a later node overwrites.
               </div>
           </div>
       </details>
